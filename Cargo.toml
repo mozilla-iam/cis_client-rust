@@ -1,0 +1,24 @@
+[package]
+name = "cis_client"
+version = "0.0.1"
+authors = ["Florian Merz <flomerz@gmail.com>"]
+edition = "2018"
+
+[lib]
+name = "cis_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cis_client"
+path = "src/main.rs"
+
+[dependencies]
+condvar_store = { git = "https://github.com/fiji-flo/condvar_store" }
+cis_profile = { git = "https://github.com/fiji-flo/cis_profile-rust", features = ["graphql", "aws", "vendored", "well_known"] }
+reqwest = "0.9.8"
+chrono = "0.4.6"
+serde = "1.0.80"
+serde_json = "1.0.32"
+serde_derive = "1.0.80"
+biscuit = "0.1.0"
+percent-encoding = "1.0"
