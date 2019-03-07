@@ -8,6 +8,7 @@ use std::io::BufReader;
 pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, String> {
     let mut store = SecretStore::default();
     store = match settings.sign_keys.source.as_str() {
+        "none" => store,
         "file" => add_sign_keys_from_files(&settings.sign_keys, store)?,
         "ssm" => add_sign_keys_from_ssm(&settings.sign_keys, store)?,
         _ => return Err(String::from("invalid sign key source: use 'file' or 'ssm'")),
@@ -16,6 +17,7 @@ pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, St
         settings.verify_keys.source.as_str(),
         &settings.verify_keys.well_known_iam_endpoint,
     ) {
+        ("none", _) => store,
         ("file", _) => add_verify_keys_from_files(&settings.verify_keys, store)?,
         ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store)?,
         ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url)?,
@@ -86,6 +88,15 @@ mod test {
     fn secret_store_from_empty() -> Result<(), String> {
         let cis_settings = CisSettings::default();
         assert!(get_store_from_settings(&cis_settings).is_err());
+        Ok(())
+    }
+    #[test]
+    fn secret_store_from_empty_with_none_setting() -> Result<(), String> {
+        let mut cis_settings = CisSettings::default();
+        cis_settings.sign_keys.source = String::from("none");
+        cis_settings.verify_keys.source = String::from("none");
+
+        assert!(get_store_from_settings(&cis_settings).is_ok());
         Ok(())
     }
 
