@@ -20,8 +20,10 @@ pub struct Keys {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct CisSettings {
-    pub person_api_user_endpoint: String,
-    pub change_api_user_endpoint: String,
+    pub person_api_user_endpoint: Option<String>,
+    pub person_api_users_endpoint: Option<String>,
+    pub change_api_user_endpoint: Option<String>,
+    pub change_api_users_endpoint: Option<String>,
     pub client_config: ClientConfig,
     pub sign_keys: Keys,
     pub verify_keys: Keys,

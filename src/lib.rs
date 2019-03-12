@@ -11,6 +11,7 @@ extern crate serde_derive;
 extern crate serde_json;
 
 mod auth;
+pub mod batch;
 pub mod client;
 mod secrets;
 pub mod settings;
