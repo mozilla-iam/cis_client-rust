@@ -1,17 +1,19 @@
+use crate::error::SecretsError;
 use crate::settings::CisSettings;
 use crate::settings::Keys;
 use cis_profile::crypto::SecretStore;
+use failure::Error;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 
-pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, String> {
+pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Error> {
     let mut store = SecretStore::default();
     store = match settings.sign_keys.source.as_str() {
         "none" => store,
         "file" => add_sign_keys_from_files(&settings.sign_keys, store)?,
         "ssm" => add_sign_keys_from_ssm(&settings.sign_keys, store)?,
-        _ => return Err(String::from("invalid sign key source: use 'file' or 'ssm'")),
+        _ => return Err(SecretsError::UseNoneFileSsm.into()),
     };
     store = match (
         settings.verify_keys.source.as_str(),
@@ -22,37 +24,35 @@ pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, St
         ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store)?,
         ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url)?,
         _ => {
-            return Err(String::from(
-                "invalid verify key source: use 'well_known', 'file' or 'ssm'",
-            ));
+            return Err(SecretsError::UseNoneFileSsmWellKnonw.into());
         }
     };
     Ok(store)
 }
 
-pub fn add_sign_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, String> {
+pub fn add_sign_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys);
     store.with_sign_keys_from_ssm_iter(key_tuples)
 }
 
-pub fn add_verify_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, String> {
+pub fn add_verify_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys);
     store.with_verify_keys_from_ssm_iter(key_tuples)
 }
 
-pub fn add_sign_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, String> {
+pub fn add_sign_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys)
         .into_iter()
         .map(|(k, v)| read_file(&v).map(|content| (k, content)))
-        .collect::<Result<Vec<(String, String)>, String>>()?;
+        .collect::<Result<Vec<(String, String)>, Error>>()?;
     store.with_sign_keys_from_inline_iter(key_tuples)
 }
 
-pub fn add_verify_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, String> {
+pub fn add_verify_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys)
         .into_iter()
         .map(|(k, v)| read_file(&v).map(|content| (k, content)))
-        .collect::<Result<Vec<(String, String)>, String>>()?;
+        .collect::<Result<Vec<(String, String)>, Error>>()?;
     store.with_verify_keys_from_inline_iter(key_tuples)
 }
 
@@ -69,14 +69,11 @@ fn get_key_tuples(keys: &Keys) -> Vec<(String, String)> {
     .collect()
 }
 
-fn read_file(file_name: &str) -> Result<String, String> {
-    let file =
-        File::open(file_name).map_err(|e| format!("unable to open file '{}': {}", file_name, e))?;
+fn read_file(file_name: &str) -> Result<String, Error> {
+    let file = File::open(file_name)?;
     let mut buf_reader = BufReader::new(file);
     let mut content = String::new();
-    buf_reader
-        .read_to_string(&mut content)
-        .map_err(|e| format!("unable to read file '{}': {}", file_name, e))?;
+    buf_reader.read_to_string(&mut content)?;
     Ok(content)
 }
 
@@ -85,13 +82,13 @@ mod test {
     use super::*;
 
     #[test]
-    fn secret_store_from_empty() -> Result<(), String> {
+    fn secret_store_from_empty() -> Result<(), Error> {
         let cis_settings = CisSettings::default();
         assert!(get_store_from_settings(&cis_settings).is_err());
         Ok(())
     }
     #[test]
-    fn secret_store_from_empty_with_none_setting() -> Result<(), String> {
+    fn secret_store_from_empty_with_none_setting() -> Result<(), Error> {
         let mut cis_settings = CisSettings::default();
         cis_settings.sign_keys.source = String::from("none");
         cis_settings.verify_keys.source = String::from("none");
@@ -101,7 +98,7 @@ mod test {
     }
 
     #[test]
-    fn test_read_file() -> Result<(), String> {
+    fn test_read_file() -> Result<(), Error> {
         let expected = include_str!("../tests/data/fake_key.json");
         let content = read_file("tests/data/fake_key.json")?;
         assert_eq!(expected, content);
