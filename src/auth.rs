@@ -1,13 +1,13 @@
+use crate::error::TokenError;
+use crate::settings::ClientConfig;
 use biscuit::jws;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
-use reqwest::Client;
-
-use serde_json::Value;
-
-use crate::settings::ClientConfig;
 use condvar_store::GetExpiry;
+use failure::Error;
+use reqwest::Client;
+use serde_json::Value;
 
 pub struct BearerBearer {
     pub bearer_token_str: String,
@@ -16,7 +16,7 @@ pub struct BearerBearer {
 }
 
 impl GetExpiry for BearerBearer {
-    fn get(&mut self) -> Result<(), String> {
+    fn get(&mut self) -> Result<(), Error> {
         self.bearer_token_str = get_raw_access_token(&self.config)?;
         self.exp = get_expiration(&self.bearer_token_str)?;
         Ok(())
@@ -36,20 +36,18 @@ impl BearerBearer {
     }
 }
 
-fn get_expiration(token: &str) -> Result<DateTime<Utc>, String> {
+fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
     let c: jws::Compact<biscuit::ClaimsSet<Value>, biscuit::Empty> =
         jws::Compact::new_encoded(&token);
-    let payload = c
-        .unverified_payload()
-        .map_err(|e| format!("unable to get payload from token: {}", e))?;
+    let payload = c.unverified_payload()?;
     let exp = payload
         .registered
         .expiry
-        .ok_or_else(|| String::from("no expiration set in token"))?;
+        .ok_or_else(|| TokenError::NoExpiry)?;
     Ok(*exp)
 }
 
-pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, String> {
+pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, Error> {
     let payload = json!(
         {
             "client_id": client_config.client_id,
@@ -63,13 +61,10 @@ pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, Stri
     let mut res = client
         .post(&client_config.token_endpoint)
         .json(&payload)
-        .send()
-        .map_err(|e| format!("can't get token: {}", e))?;
-    let j: serde_json::Value = res
-        .json()
-        .map_err(|e| format!("can't parse token: {}", e))?;
+        .send()?;
+    let j: serde_json::Value = res.json()?;
     j["access_token"]
         .as_str()
         .map(|s| s.to_owned())
-        .ok_or_else(|| String::from("no token :/"))
+        .ok_or_else(|| TokenError::NoToken.into())
 }

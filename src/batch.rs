@@ -1,5 +1,7 @@
 use crate::client::CisClientTrait;
+use crate::error::ProfileIterError;
 use cis_profile::schema::Profile;
+use failure::Error;
 use std::iter::Iterator;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -46,7 +48,7 @@ impl<T> ProfileIter<T> {
 }
 
 impl<T: CisClientTrait> Iterator for ProfileIter<T> {
-    type Item = Result<Vec<Profile>, String>;
+    type Item = Result<Vec<Profile>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.state {
             ProfileIterState::Done | ProfileIterState::Error => None,
@@ -84,7 +86,7 @@ impl<T: CisClientTrait> Iterator for ProfileIter<T> {
                     }
                 } else {
                     self.state = ProfileIterState::Error;
-                    Some(Err(String::from("invalid ProfileIter state")))
+                    Some(Err(ProfileIterError::InvalidState.into()))
                 }
             }
         }
@@ -103,17 +105,17 @@ mod test {
     }
     impl CisClientTrait for CisClientFaker {
         type PI = ProfileIter<Self>;
-        fn get_user_by(&self, _: &str, _: &GetBy, _: Option<&str>) -> Result<Profile, String> {
+        fn get_user_by(&self, _: &str, _: &GetBy, _: Option<&str>) -> Result<Profile, Error> {
             unimplemented!()
         }
-        fn get_users_iter(&self, _: Option<&str>) -> Result<Self::PI, String> {
+        fn get_users_iter(&self, _: Option<&str>) -> Result<Self::PI, Error> {
             unimplemented!()
         }
         fn get_batch(
             &self,
             pagination_token: &Option<NextPage>,
             _: &Option<String>,
-        ) -> Result<Batch, String> {
+        ) -> Result<Batch, Error> {
             if pagination_token.is_none() && self.count == 0 {
                 return Ok(Batch {
                     items: None,
@@ -136,13 +138,13 @@ mod test {
                 },
             });
         }
-        fn update_user(&self, _: &str, _: Profile) -> Result<Value, String> {
+        fn update_user(&self, _: &str, _: Profile) -> Result<Value, Error> {
             unimplemented!()
         }
-        fn update_users(&self, _: &[Profile]) -> Result<Value, String> {
+        fn update_users(&self, _: &[Profile]) -> Result<Value, Error> {
             unimplemented!()
         }
-        fn delete_user(&self, _: &str, _: Profile) -> Result<Value, String> {
+        fn delete_user(&self, _: &str, _: Profile) -> Result<Value, Error> {
             unimplemented!()
         }
         fn get_secret_store(&self) -> &SecretStore {
@@ -151,28 +153,28 @@ mod test {
     }
 
     #[test]
-    fn test_profile_iter_empty() -> Result<(), String> {
+    fn test_profile_iter_empty() -> Result<(), Error> {
         let mut iter = ProfileIter::new(CisClientFaker { count: 0 }, None);
-        assert_eq!(iter.next(), None);
+        assert!(iter.next().is_none());
         assert!(!iter.is_err());
         Ok(())
     }
 
     #[test]
-    fn test_profile_iter1() -> Result<(), String> {
+    fn test_profile_iter1() -> Result<(), Error> {
         let mut iter = ProfileIter::new(CisClientFaker { count: 1 }, None);
         assert!(iter.next().is_some());
-        assert_eq!(iter.next(), None);
+        assert!(iter.next().is_none());
         assert!(!iter.is_err());
         Ok(())
     }
 
     #[test]
-    fn test_profile_iter2() -> Result<(), String> {
+    fn test_profile_iter2() -> Result<(), Error> {
         let mut iter = ProfileIter::new(CisClientFaker { count: 2 }, None);
         assert!(iter.next().is_some());
         assert!(iter.next().is_some());
-        assert_eq!(iter.next(), None);
+        assert!(iter.next().is_none());
         assert!(!iter.is_err());
         Ok(())
     }
