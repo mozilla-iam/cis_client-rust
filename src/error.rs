@@ -19,3 +19,9 @@ pub enum ProfileIterError {
     #[fail(display = "invalid profile iter state")]
     InvalidState,
 }
+
+#[derive(Debug, Fail)]
+pub enum ProfileError {
+    #[fail(display = "profile does not exist")]
+    ProfileDoesNotExist,
+}

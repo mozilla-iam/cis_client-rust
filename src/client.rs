@@ -2,6 +2,7 @@ use crate::auth::BearerBearer;
 use crate::batch::Batch;
 use crate::batch::NextPage;
 use crate::batch::ProfileIter;
+use crate::error::ProfileError;
 use crate::secrets::get_store_from_settings;
 use crate::settings::CisSettings;
 use cis_profile::crypto::SecretStore;
@@ -90,7 +91,7 @@ impl CisClient {
         })
     }
 
-    fn bearer_token(&self) -> Result<String, Error> {
+    pub fn bearer_token(&self) -> Result<String, Error> {
         let b = self.bearer_store.get()?;
         let b1 = b
             .read()
@@ -116,7 +117,11 @@ impl CisClientTrait for CisClient {
         let token = self.bearer_token()?;
         let client = Client::new().get(url.as_str()).bearer_auth(token);
         let mut res: reqwest::Response = client.send()?.error_for_status()?;
-        res.json().map_err(|e| e.into())
+        let profile: Profile = res.json()?;
+        if profile.uuid.value.is_none() {
+            return Err(ProfileError::ProfileDoesNotExist.into());
+        }
+        Ok(profile)
     }
 
     fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error> {
