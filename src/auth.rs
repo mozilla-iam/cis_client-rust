@@ -65,6 +65,6 @@ pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, Erro
     let j: serde_json::Value = res.json()?;
     j["access_token"]
         .as_str()
-        .map(|s| s.to_owned())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| TokenError::NoToken.into())
 }

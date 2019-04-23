@@ -161,7 +161,7 @@ impl CisClientTrait for CisClient {
         url.set_query(Some(&format!("user_id={}", safe_id)));
         let client = Client::new().post(url).json(&profile).bearer_auth(token);
         let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(|e| e.into())
+        res.json().map_err(Into::into)
     }
 
     fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error> {
@@ -184,7 +184,7 @@ impl CisClientTrait for CisClient {
         url.set_query(Some(&format!("user_id={}", safe_id)));
         let client = Client::new().delete(url).json(&profile).bearer_auth(token);
         let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(|e| e.into())
+        res.json().map_err(Into::into)
     }
 
     fn get_secret_store(&self) -> &SecretStore {
