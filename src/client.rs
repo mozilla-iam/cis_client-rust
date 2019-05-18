@@ -1,3 +1,4 @@
+use crate::auth::Auth0;
 use crate::auth::BearerBearer;
 use crate::batch::Batch;
 use crate::batch::NextPage;
@@ -7,14 +8,14 @@ use crate::secrets::get_store_from_settings;
 use crate::settings::CisSettings;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
-use condvar_store::CondvarStore;
-use condvar_store::CondvarStoreError;
 use failure::Error;
+use futures::Future;
 use percent_encoding::utf8_percent_encode;
 use percent_encoding::USERINFO_ENCODE_SET;
 use reqwest::Client;
 use reqwest::Url;
 use serde_json::Value;
+use shared_expiry_get::RemoteStore;
 use std::sync::Arc;
 
 static DEFAULT_BATCH_SIZE: usize = 25;
@@ -55,7 +56,7 @@ pub trait CisClientTrait {
 
 #[derive(Clone)]
 pub struct CisClient {
-    pub bearer_store: CondvarStore<BearerBearer>,
+    pub bearer_store: RemoteStore<BearerBearer, Auth0>,
     pub person_api_user_endpoint: String,
     pub person_api_users_endpoint: String,
     pub change_api_user_endpoint: String,
@@ -66,7 +67,7 @@ pub struct CisClient {
 
 impl CisClient {
     pub fn from_settings(settings: &CisSettings) -> Result<Self, Error> {
-        let bearer_store = CondvarStore::new(BearerBearer::new(settings.client_config.clone()));
+        let bearer_store = RemoteStore::new(Auth0::new(settings.client_config.clone()));
         let secret_store = get_store_from_settings(settings)?;
         Ok(CisClient {
             bearer_store,
@@ -92,11 +93,8 @@ impl CisClient {
     }
 
     pub fn bearer_token(&self) -> Result<String, Error> {
-        let b = self.bearer_store.get()?;
-        let b1 = b
-            .read()
-            .map_err(|e| CondvarStoreError::PoisonedLock(e.to_string()))?;
-        Ok((*b1.bearer_token_str).to_owned())
+        let b = self.bearer_store.get().wait()?;
+        Ok((*b.bearer_token_str).to_owned())
     }
 }
 

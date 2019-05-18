@@ -2,37 +2,52 @@ use crate::error::TokenError;
 use crate::settings::ClientConfig;
 use biscuit::jws;
 use chrono::DateTime;
-use chrono::TimeZone;
 use chrono::Utc;
-use condvar_store::GetExpiry;
 use failure::Error;
-use reqwest::Client;
+use futures::future;
+use futures::Future;
+use reqwest::r#async::Client;
 use serde_json::Value;
+use shared_expiry_get::Expiry;
+use shared_expiry_get::Provider;
+use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct BearerBearer {
-    pub bearer_token_str: String,
-    pub exp: DateTime<Utc>,
-    pub config: ClientConfig,
+    pub bearer_token_str: Arc<String>,
+    pub exp: Arc<DateTime<Utc>>,
 }
 
-impl GetExpiry for BearerBearer {
-    fn get(&mut self) -> Result<(), Error> {
-        self.bearer_token_str = get_raw_access_token(&self.config)?;
-        self.exp = get_expiration(&self.bearer_token_str)?;
-        Ok(())
-    }
-    fn expiry(&self) -> DateTime<Utc> {
-        self.exp
+impl Expiry for BearerBearer {
+    fn valid(&self) -> bool {
+        *self.exp > Utc::now()
     }
 }
 
-impl BearerBearer {
+pub struct Auth0 {
+    pub config: Arc<ClientConfig>,
+}
+
+impl Auth0 {
     pub fn new(config: ClientConfig) -> Self {
-        BearerBearer {
-            bearer_token_str: String::default(),
-            exp: Utc.timestamp(0, 0),
-            config,
+        Auth0 {
+            config: Arc::new(config),
         }
+    }
+}
+
+impl Provider<BearerBearer> for Auth0 {
+    fn update(&self) -> Box<Future<Item = BearerBearer, Error = Error> + Send> {
+        Box::new(get_raw_access_token(&*self.config).and_then(|token| {
+            let exp = match get_expiration(&token) {
+                Ok(exp) => exp,
+                Err(e) => return future::err(e),
+            };
+            future::ok(BearerBearer {
+                bearer_token_str: token,
+                exp: Arc::new(exp),
+            })
+        }))
     }
 }
 
@@ -47,7 +62,9 @@ fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
     Ok(*exp)
 }
 
-pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, Error> {
+pub fn get_raw_access_token(
+    client_config: &ClientConfig,
+) -> Box<Future<Item = Arc<String>, Error = Error> + Send> {
     let payload = json!(
         {
             "client_id": client_config.client_id,
@@ -58,13 +75,19 @@ pub fn get_raw_access_token(client_config: &ClientConfig) -> Result<String, Erro
         }
     );
     let client = Client::new();
-    let mut res = client
+    let res = client
         .post(&client_config.token_endpoint)
         .json(&payload)
-        .send()?;
-    let j: serde_json::Value = res.json()?;
-    j["access_token"]
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| TokenError::NoToken.into())
+        .send()
+        .map_err(Into::into);
+    Box::new(
+        res.and_then(|mut r| r.json().map_err(Into::into))
+            .and_then(|j: serde_json::Value| {
+                j["access_token"]
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .map(Arc::new)
+                    .ok_or_else(|| TokenError::NoToken.into())
+            }),
+    )
 }

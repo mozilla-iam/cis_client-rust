@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 condvar_store = { git = "https://github.com/fiji-flo/condvar_store", version = "0.0.2" }
+shared-expiry-get = "0.0.1"
 cis_profile = { git = "https://github.com/fiji-flo/cis_profile-rust", version = "0.0.3", branch = "ring-14", features = ["graphql", "aws", "vendored", "well_known"] }
 reqwest = "0.9"
 chrono = "0.4"
@@ -16,3 +17,4 @@ biscuit = "0.2"
 percent-encoding = "1.0"
 failure = "0.1.5"
 failure_derive = "0.1.5"
+futures = "0.1"
