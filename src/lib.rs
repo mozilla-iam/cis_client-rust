@@ -14,11 +14,14 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 
-pub mod r#async;
-pub mod async_batch;
 mod auth;
 pub mod batch;
-pub mod client;
+mod client;
 pub mod error;
+pub mod getby;
 mod secrets;
 pub mod settings;
+mod sync;
+
+pub use client::AsyncCisClientTrait;
+pub use client::CisClient;

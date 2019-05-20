@@ -1,8 +1,12 @@
-use crate::client::CisClientTrait;
-use crate::error::ProfileIterError;
+use crate::client::AsyncCisClientTrait;
 use cis_profile::schema::Profile;
 use failure::Error;
-use std::iter::Iterator;
+use futures::stream::Stream;
+use futures::Async;
+use futures::Future;
+use futures::Poll;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct NextPage {
@@ -11,7 +15,7 @@ pub struct NextPage {
 
 #[derive(Debug)]
 pub struct Batch {
-    pub items: Option<Vec<Profile>>,
+    pub items: Vec<Profile>,
     pub next_page: Option<NextPage>,
 }
 
@@ -20,73 +24,67 @@ enum ProfileIterState {
     Uninitalized,
     Inflight,
     Done,
-    Error,
 }
 
 /// Iterator over batches of [Profile]s.
 /// Internally this retrieves batches of users from the `/users' endpoint.
-pub struct ProfileIter<T> {
+pub struct AsyncProfileIter<T> {
     cis_client: T,
     filter: Option<String>,
-    current_batch: Option<Batch>,
+    next: Arc<Mutex<Option<NextPage>>>,
     state: ProfileIterState,
 }
 
-impl<T> ProfileIter<T> {
+impl<T> AsyncProfileIter<T> {
     pub fn new(cis_client: T, filter: Option<String>) -> Self {
-        ProfileIter {
+        AsyncProfileIter {
             cis_client,
             filter,
-            current_batch: None,
+            next: Arc::new(Mutex::new(None)),
             state: ProfileIterState::Uninitalized,
         }
     }
-
-    pub fn is_err(&self) -> bool {
-        self.state == ProfileIterState::Error
-    }
 }
 
-impl<T: CisClientTrait> Iterator for ProfileIter<T> {
-    type Item = Result<Vec<Profile>, Error>;
-    fn next(&mut self) -> Option<Self::Item> {
+impl<T: AsyncCisClientTrait> Stream for AsyncProfileIter<T> {
+    type Item = Vec<Profile>;
+    type Error = Error;
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self.state {
-            ProfileIterState::Done | ProfileIterState::Error => None,
+            ProfileIterState::Done => Ok(Async::Ready(None)),
             ProfileIterState::Uninitalized => {
-                match self.cis_client.get_batch(&None, &self.filter) {
-                    Ok(new_batch) => {
-                        self.state = ProfileIterState::Inflight;
-                        self.current_batch = Some(new_batch);
-                        self.next()
-                    }
-                    Err(e) => {
-                        self.state = ProfileIterState::Error;
-                        Some(Err(e))
-                    }
-                }
+                let next = Arc::clone(&self.next);
+                self.state = ProfileIterState::Inflight;
+                self.cis_client
+                    .get_batch(&None, &self.filter)
+                    .map(|batch| {
+                        if batch.next_page.is_none() && batch.items.is_empty() {
+                            None
+                        } else {
+                            println!("updated init");
+                            *next.lock().unwrap() = batch.next_page;
+                            Some(batch.items)
+                        }
+                    })
+                    .poll()
             }
             ProfileIterState::Inflight => {
-                if let Some(batch) = &mut self.current_batch {
-                    if let Some(profiles) = batch.items.take() {
-                        Some(Ok(profiles))
-                    } else if let Some(next_page) = batch.next_page.take() {
-                        match self.cis_client.get_batch(&Some(next_page), &self.filter) {
-                            Ok(new_batch) => {
-                                self.current_batch = Some(new_batch);
-                                self.next()
-                            }
-                            Err(e) => {
-                                self.state = ProfileIterState::Error;
-                                Some(Err(e))
-                            }
-                        }
-                    } else {
-                        self.state = ProfileIterState::Done;
-                        None
-                    }
+                println!("inflight");
+                let next = Arc::clone(&self.next);
+                let nexter = self.next.lock().unwrap().clone();
+                if nexter.is_none() {
+                    println!("done");
+                    self.state = ProfileIterState::Done;
+                    self.poll()
                 } else {
-                    self.state = ProfileIterState::Error;
-                    Some(Err(ProfileIterError::InvalidState.into()))
+                    self.cis_client
+                        .get_batch(&nexter, &self.filter)
+                        .map(|batch| {
+                            println!("updated");
+                            *next.lock().unwrap() = batch.next_page;
+                            Some(batch.items)
+                        })
+                        .poll()
                 }
             }
         }
@@ -96,39 +94,48 @@ impl<T: CisClientTrait> Iterator for ProfileIter<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::client::GetBy;
+    use crate::getby::GetBy;
     use cis_profile::crypto::SecretStore;
+    use futures::future;
     use serde_json::Value;
 
     struct CisClientFaker {
         count: usize,
     }
-    impl CisClientTrait for CisClientFaker {
-        type PI = ProfileIter<Self>;
-        fn get_user_by(&self, _: &str, _: &GetBy, _: Option<&str>) -> Result<Profile, Error> {
+    impl AsyncCisClientTrait for CisClientFaker {
+        type PI = AsyncProfileIter<Self>;
+        fn get_user_by(
+            &self,
+            _id: &str,
+            _by: &GetBy,
+            _filter: Option<&str>,
+        ) -> Box<Future<Item = Profile, Error = Error>> {
             unimplemented!()
         }
-        fn get_users_iter(&self, _: Option<&str>) -> Result<Self::PI, Error> {
+        fn get_users_iter(
+            &self,
+            _filter: Option<&str>,
+        ) -> Box<Stream<Item = Self::PI, Error = Error>> {
             unimplemented!()
         }
         fn get_batch(
             &self,
             pagination_token: &Option<NextPage>,
             _: &Option<String>,
-        ) -> Result<Batch, Error> {
+        ) -> Box<Future<Item = Batch, Error = Error>> {
             if pagination_token.is_none() && self.count == 0 {
-                return Ok(Batch {
-                    items: None,
+                return Box::new(future::ok(Batch {
+                    items: vec![],
                     next_page: None,
-                });
+                }));
             };
             let left = if let Some(n) = pagination_token {
                 n.id.parse().unwrap()
             } else {
                 self.count
             };
-            return Ok(Batch {
-                items: Some(vec![Profile::default()]),
+            return Box::new(future::ok(Batch {
+                items: vec![Profile::default()],
                 next_page: if left > 1 {
                     Some(NextPage {
                         id: format!("{}", left - 1),
@@ -136,15 +143,23 @@ mod test {
                 } else {
                     None
                 },
-            });
+            }));
         }
-        fn update_user(&self, _: &str, _: Profile) -> Result<Value, Error> {
+        fn update_user(
+            &self,
+            _id: &str,
+            _profile: Profile,
+        ) -> Box<Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
-        fn update_users(&self, _: &[Profile]) -> Result<Value, Error> {
+        fn update_users(&self, _profiles: &[Profile]) -> Box<Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
-        fn delete_user(&self, _: &str, _: Profile) -> Result<Value, Error> {
+        fn delete_user(
+            &self,
+            _id: &str,
+            _profile: Profile,
+        ) -> Box<Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
         fn get_secret_store(&self) -> &SecretStore {
@@ -154,28 +169,25 @@ mod test {
 
     #[test]
     fn test_profile_iter_empty() -> Result<(), Error> {
-        let mut iter = ProfileIter::new(CisClientFaker { count: 0 }, None);
+        let mut iter = AsyncProfileIter::new(CisClientFaker { count: 0 }, None).wait();
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 
     #[test]
     fn test_profile_iter1() -> Result<(), Error> {
-        let mut iter = ProfileIter::new(CisClientFaker { count: 1 }, None);
+        let mut iter = AsyncProfileIter::new(CisClientFaker { count: 1 }, None).wait();
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 
     #[test]
     fn test_profile_iter2() -> Result<(), Error> {
-        let mut iter = ProfileIter::new(CisClientFaker { count: 2 }, None);
+        let mut iter = AsyncProfileIter::new(CisClientFaker { count: 2 }, None).wait();
         assert!(iter.next().is_some());
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 }
