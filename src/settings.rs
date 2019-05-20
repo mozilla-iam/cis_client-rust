@@ -18,7 +18,7 @@ pub struct Keys {
     pub access_provider_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct CisSettings {
     pub person_api_user_endpoint: Option<String>,
     pub person_api_users_endpoint: Option<String>,
