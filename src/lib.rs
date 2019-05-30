@@ -21,7 +21,7 @@ pub mod error;
 pub mod getby;
 mod secrets;
 pub mod settings;
-mod sync;
+pub mod sync;
 
 pub use client::AsyncCisClientTrait;
 pub use client::CisClient;
