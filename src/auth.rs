@@ -7,6 +7,7 @@ use failure::Error;
 use futures::future;
 use futures::Future;
 use reqwest::r#async::Client;
+use serde_json::json;
 use serde_json::Value;
 use shared_expiry_get::Expiry;
 use shared_expiry_get::Provider;
@@ -37,7 +38,7 @@ impl Auth0 {
 }
 
 impl Provider<BearerBearer> for Auth0 {
-    fn update(&self) -> Box<Future<Item = BearerBearer, Error = Error> + Send> {
+    fn update(&self) -> Box<dyn Future<Item = BearerBearer, Error = Error> + Send> {
         Box::new(get_raw_access_token(&*self.config).and_then(|token| {
             let exp = match get_expiration(&token) {
                 Ok(exp) => exp,
@@ -64,7 +65,7 @@ fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
 
 pub fn get_raw_access_token(
     client_config: &ClientConfig,
-) -> Box<Future<Item = Arc<String>, Error = Error> + Send> {
+) -> Box<dyn Future<Item = Arc<String>, Error = Error> + Send> {
     let payload = json!(
         {
             "client_id": client_config.client_id,

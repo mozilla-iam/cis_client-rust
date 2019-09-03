@@ -2,6 +2,8 @@ use crate::error::ProfileIterError;
 use crate::sync::client::CisClientTrait;
 use cis_profile::schema::Profile;
 use failure::Error;
+use serde::Deserialize;
+use serde::Serialize;
 use std::iter::Iterator;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -102,6 +104,14 @@ mod test {
     impl CisClientTrait for CisClientFaker {
         type PI = ProfileIter<Self>;
         fn get_user_by(&self, _: &str, _: &GetBy, _: Option<&str>) -> Result<Profile, Error> {
+            unimplemented!()
+        }
+        fn get_inactive_user_by(
+            &self,
+            _: &str,
+            _: &GetBy,
+            _: Option<&str>,
+        ) -> Result<Profile, Error> {
             unimplemented!()
         }
         fn get_users_iter(&self, _: Option<&str>) -> Result<Self::PI, Error> {

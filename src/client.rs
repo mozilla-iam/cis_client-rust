@@ -11,6 +11,7 @@ use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
 use failure::Error;
 use futures::future;
+use futures::future::lazy;
 use futures::stream::Stream;
 use futures::Future;
 use percent_encoding::utf8_percent_encode;
@@ -20,6 +21,7 @@ use reqwest::Url;
 use serde_json::Value;
 use shared_expiry_get::RemoteStore;
 use std::sync::Arc;
+use tokio::runtime::current_thread;
 
 static DEFAULT_BATCH_SIZE: usize = 25;
 
@@ -62,7 +64,7 @@ impl CisClient {
     }
 
     pub fn bearer_token(&self) -> Result<String, Error> {
-        let b = self.bearer_store.get().wait()?;
+        let b = current_thread::block_on_all(lazy(|| self.bearer_store.get()))?;
         Ok((*b.bearer_token_str).to_owned())
     }
 }
@@ -74,27 +76,44 @@ pub trait AsyncCisClientTrait {
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-    ) -> Box<Future<Item = Profile, Error = Error>>;
-    fn get_users_iter(&self, filter: Option<&str>) -> Box<Stream<Item = Self::PI, Error = Error>>;
-    fn get_batch(
-        &self,
-        next_page: &Option<NextPage>,
-        filter: &Option<String>,
-    ) -> Box<Future<Item = Batch, Error = Error>>;
-    fn update_user(&self, id: &str, profile: Profile) -> Box<Future<Item = Value, Error = Error>>;
-    fn update_users(&self, profiles: &[Profile]) -> Box<Future<Item = Value, Error = Error>>;
-    fn delete_user(&self, id: &str, profile: Profile) -> Box<Future<Item = Value, Error = Error>>;
-    fn get_secret_store(&self) -> &SecretStore;
-}
-
-impl AsyncCisClientTrait for CisClient {
-    type PI = AsyncProfileIter<CisClient>;
-    fn get_user_by(
+    ) -> Box<dyn Future<Item = Profile, Error = Error>>;
+    fn get_inactive_user_by(
         &self,
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-    ) -> Box<Future<Item = Profile, Error = Error>> {
+    ) -> Box<dyn Future<Item = Profile, Error = Error>>;
+    fn get_users_iter(
+        &self,
+        filter: Option<&str>,
+    ) -> Box<dyn Stream<Item = Self::PI, Error = Error>>;
+    fn get_batch(
+        &self,
+        next_page: &Option<NextPage>,
+        filter: &Option<String>,
+    ) -> Box<dyn Future<Item = Batch, Error = Error>>;
+    fn update_user(
+        &self,
+        id: &str,
+        profile: Profile,
+    ) -> Box<dyn Future<Item = Value, Error = Error>>;
+    fn update_users(&self, profiles: &[Profile]) -> Box<dyn Future<Item = Value, Error = Error>>;
+    fn delete_user(
+        &self,
+        id: &str,
+        profile: Profile,
+    ) -> Box<dyn Future<Item = Value, Error = Error>>;
+    fn get_secret_store(&self) -> &SecretStore;
+}
+
+impl CisClient {
+    fn get_user(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+        active: bool,
+    ) -> Box<dyn Future<Item = Profile, Error = Error>> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let base = match Url::parse(&self.person_api_user_endpoint) {
             Ok(base) => base,
@@ -107,6 +126,7 @@ impl AsyncCisClientTrait for CisClient {
                 if let Some(df) = filter {
                     u.set_query(Some(&format!("filterDisplay={}", df.to_string())))
                 }
+                u.set_query(Some(&format!("active={}", active)));
                 u
             }) {
             Ok(url) => url,
@@ -131,14 +151,37 @@ impl AsyncCisClientTrait for CisClient {
                 }),
         )
     }
-    fn get_users_iter(&self, _filter: Option<&str>) -> Box<Stream<Item = Self::PI, Error = Error>> {
+}
+
+impl AsyncCisClientTrait for CisClient {
+    type PI = AsyncProfileIter<CisClient>;
+    fn get_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Box<dyn Future<Item = Profile, Error = Error>> {
+        self.get_user(id, by, filter, true)
+    }
+    fn get_inactive_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Box<dyn Future<Item = Profile, Error = Error>> {
+        self.get_user(id, by, filter, false)
+    }
+    fn get_users_iter(
+        &self,
+        _filter: Option<&str>,
+    ) -> Box<dyn Stream<Item = Self::PI, Error = Error>> {
         unimplemented!()
     }
     fn get_batch(
         &self,
         next_page: &Option<NextPage>,
         filter: &Option<String>,
-    ) -> Box<Future<Item = Batch, Error = Error>> {
+    ) -> Box<dyn Future<Item = Batch, Error = Error>> {
         let mut url = match Url::parse(&self.person_api_users_endpoint) {
             Ok(base) => base,
             Err(e) => return Box::new(future::err(e.into())),
@@ -177,7 +220,11 @@ impl AsyncCisClientTrait for CisClient {
                 }),
         )
     }
-    fn update_user(&self, id: &str, profile: Profile) -> Box<Future<Item = Value, Error = Error>> {
+    fn update_user(
+        &self,
+        id: &str,
+        profile: Profile,
+    ) -> Box<dyn Future<Item = Value, Error = Error>> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let mut url = match Url::parse(&self.change_api_user_endpoint) {
             Ok(base) => base,
@@ -199,10 +246,14 @@ impl AsyncCisClientTrait for CisClient {
                 .and_then(|mut res| res.json().map_err(Into::into)),
         )
     }
-    fn update_users(&self, _profiles: &[Profile]) -> Box<Future<Item = Value, Error = Error>> {
+    fn update_users(&self, _profiles: &[Profile]) -> Box<dyn Future<Item = Value, Error = Error>> {
         unimplemented!()
     }
-    fn delete_user(&self, id: &str, profile: Profile) -> Box<Future<Item = Value, Error = Error>> {
+    fn delete_user(
+        &self,
+        id: &str,
+        profile: Profile,
+    ) -> Box<dyn Future<Item = Value, Error = Error>> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let mut url = match Url::parse(&self.change_api_user_endpoint) {
             Ok(base) => base,

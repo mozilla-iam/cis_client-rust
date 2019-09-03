@@ -5,6 +5,8 @@ use futures::stream::Stream;
 use futures::Async;
 use futures::Future;
 use futures::Poll;
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -109,20 +111,28 @@ mod test {
             _id: &str,
             _by: &GetBy,
             _filter: Option<&str>,
-        ) -> Box<Future<Item = Profile, Error = Error>> {
+        ) -> Box<dyn Future<Item = Profile, Error = Error>> {
+            unimplemented!()
+        }
+        fn get_inactive_user_by(
+            &self,
+            _id: &str,
+            _by: &GetBy,
+            _filter: Option<&str>,
+        ) -> Box<dyn Future<Item = Profile, Error = Error>> {
             unimplemented!()
         }
         fn get_users_iter(
             &self,
             _filter: Option<&str>,
-        ) -> Box<Stream<Item = Self::PI, Error = Error>> {
+        ) -> Box<dyn Stream<Item = Self::PI, Error = Error>> {
             unimplemented!()
         }
         fn get_batch(
             &self,
             pagination_token: &Option<NextPage>,
             _: &Option<String>,
-        ) -> Box<Future<Item = Batch, Error = Error>> {
+        ) -> Box<dyn Future<Item = Batch, Error = Error>> {
             if pagination_token.is_none() && self.count == 0 {
                 return Box::new(future::ok(Batch {
                     items: vec![],
@@ -149,17 +159,20 @@ mod test {
             &self,
             _id: &str,
             _profile: Profile,
-        ) -> Box<Future<Item = Value, Error = Error>> {
+        ) -> Box<dyn Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
-        fn update_users(&self, _profiles: &[Profile]) -> Box<Future<Item = Value, Error = Error>> {
+        fn update_users(
+            &self,
+            _profiles: &[Profile],
+        ) -> Box<dyn Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
         fn delete_user(
             &self,
             _id: &str,
             _profile: Profile,
-        ) -> Box<Future<Item = Value, Error = Error>> {
+        ) -> Box<dyn Future<Item = Value, Error = Error>> {
             unimplemented!()
         }
         fn get_secret_store(&self) -> &SecretStore {

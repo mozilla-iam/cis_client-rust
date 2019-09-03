@@ -11,11 +11,18 @@ use percent_encoding::utf8_percent_encode;
 use percent_encoding::USERINFO_ENCODE_SET;
 use reqwest::Client;
 use reqwest::Url;
+use serde_json::json;
 use serde_json::Value;
 
 pub trait CisClientTrait {
     type PI: Iterator<Item = Result<Vec<Profile>, Error>>;
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error>;
+    fn get_inactive_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, Error>;
     fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error>;
     fn get_batch(
         &self,
@@ -28,9 +35,14 @@ pub trait CisClientTrait {
     fn get_secret_store(&self) -> &SecretStore;
 }
 
-impl CisClientTrait for CisClient {
-    type PI = ProfileIter<CisClient>;
-    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error> {
+impl CisClient {
+    fn get_user_sync(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+        active: bool,
+    ) -> Result<Profile, Error> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let base = Url::parse(&self.person_api_user_endpoint)?;
         let url = base
@@ -40,6 +52,7 @@ impl CisClientTrait for CisClient {
                 if let Some(df) = filter {
                     u.set_query(Some(&format!("filterDisplay={}", df.to_string())))
                 }
+                u.set_query(Some(&format!("active={}", active)));
                 u
             })?;
         let token = self.bearer_token()?;
@@ -50,6 +63,22 @@ impl CisClientTrait for CisClient {
             return Err(ProfileError::ProfileDoesNotExist.into());
         }
         Ok(profile)
+    }
+}
+
+impl CisClientTrait for CisClient {
+    type PI = ProfileIter<CisClient>;
+
+    fn get_inactive_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, Error> {
+        self.get_user_sync(id, by, filter, false)
+    }
+    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error> {
+        self.get_user_sync(id, by, filter, true)
     }
 
     fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error> {
