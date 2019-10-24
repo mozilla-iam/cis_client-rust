@@ -1,6 +1,6 @@
 [package]
 name = "cis_client"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Florian Merz <flomerz@gmail.com>"]
 edition = "2018"
 

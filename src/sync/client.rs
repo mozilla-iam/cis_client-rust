@@ -50,9 +50,10 @@ impl CisClient {
             .and_then(|u| u.join(&safe_id))
             .map(|mut u| {
                 if let Some(df) = filter {
-                    u.set_query(Some(&format!("filterDisplay={}", df.to_string())))
+                    u.query_pairs_mut().append_pair("filterDisplay", df);
                 }
-                u.set_query(Some(&format!("active={}", active)));
+                u.query_pairs_mut()
+                    .append_pair("active", &active.to_string());
                 u
             })?;
         let token = self.bearer_token()?;
@@ -93,7 +94,7 @@ impl CisClientTrait for CisClient {
     ) -> Result<Batch, Error> {
         let mut url = Url::parse(&self.person_api_users_endpoint)?;
         if let Some(df) = filter {
-            url.set_query(Some(&format!("filterDisplay={}", df.to_string())))
+            url.query_pairs_mut().append_pair("filterDisplay", df);
         }
         if let Some(next_page_token) = next_page {
             let next_page_json = serde_json::to_string(next_page_token)?;
