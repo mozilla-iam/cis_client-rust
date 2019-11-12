@@ -7,7 +7,6 @@ use failure::Error;
 use futures::future;
 use futures::Future;
 use reqwest::r#async::Client;
-use serde_json::json;
 use serde_json::Value;
 use shared_expiry_get::Expiry;
 use shared_expiry_get::Provider;
@@ -66,19 +65,17 @@ fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
 pub fn get_raw_access_token(
     client_config: &ClientConfig,
 ) -> Box<dyn Future<Item = Arc<String>, Error = Error> + Send> {
-    let payload = json!(
-        {
-            "client_id": client_config.client_id,
-            "client_secret": client_config.client_secret,
-            "audience": client_config.audience,
-            "grant_type": "client_credentials",
-            "scopes": client_config.scopes,
-        }
-    );
+    let query = &[
+        ("client_id", client_config.client_id.as_str()),
+        ("client_secret", client_config.client_secret.as_str()),
+        ("audience", client_config.audience.as_str()),
+        ("grant_type", "client_credentials"),
+        ("scope", client_config.scopes.as_str()),
+    ];
     let client = Client::new();
     let res = client
         .post(&client_config.token_endpoint)
-        .json(&payload)
+        .form(query)
         .send()
         .map_err(Into::into);
     Box::new(
