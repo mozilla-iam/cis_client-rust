@@ -4,6 +4,7 @@ extern crate failure_derive;
 mod auth;
 pub mod batch;
 mod client;
+mod encoding;
 pub mod error;
 pub mod getby;
 mod secrets;

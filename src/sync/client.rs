@@ -8,7 +8,7 @@ use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
 use failure::Error;
 use percent_encoding::utf8_percent_encode;
-use percent_encoding::USERINFO_ENCODE_SET;
+use crate::encoding::USERINFO_ENCODE_SET;
 use reqwest::Client;
 use reqwest::Url;
 use serde_json::json;

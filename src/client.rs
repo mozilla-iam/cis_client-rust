@@ -15,7 +15,7 @@ use futures::future::lazy;
 use futures::stream::Stream;
 use futures::Future;
 use percent_encoding::utf8_percent_encode;
-use percent_encoding::USERINFO_ENCODE_SET;
+use crate::encoding::USERINFO_ENCODE_SET;
 use reqwest::r#async::Client;
 use reqwest::Url;
 use serde_json::Value;
