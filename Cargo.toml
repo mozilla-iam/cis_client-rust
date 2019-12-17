@@ -1,12 +1,12 @@
 [package]
 name = "cis_client"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Florian Merz <flomerz@gmail.com>"]
 edition = "2018"
 
 [dependencies]
 shared-expiry-get = "0.0.1"
-cis_profile = { git = "https://github.com/fiji-flo/cis_profile-rust", version = "0.3.0", branch = "0.3.0", features = ["aws", "vendored", "well_known"] }
+cis_profile = { git = "https://github.com/fiji-flo/cis_profile-rust", version = "0.3.1", branch = "0.3.1", features = ["aws", "vendored", "well_known"] }
 reqwest = "0.9"
 biscuit = "0.4"
 chrono = "0.4"
