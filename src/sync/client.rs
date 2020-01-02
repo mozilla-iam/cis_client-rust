@@ -8,9 +8,15 @@ use crate::sync::batch::ProfileIter;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
 use failure::Error;
+use futures::executor::block_on;
+use futures::future::FutureExt;
+use futures::future::TryFutureExt;
 use percent_encoding::utf8_percent_encode;
 use reqwest::Client;
+use reqwest::Response;
 use reqwest::Url;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
@@ -56,14 +62,35 @@ impl CisClient {
                     .append_pair("active", &active.to_string());
                 u
             })?;
-        let token = self.bearer_token()?;
-        let client = Client::new().get(url.as_str()).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?.error_for_status()?;
-        let profile: Profile = res.json()?;
+        let profile: Profile = self.get(url)?;
         if profile.uuid.value.is_none() {
             return Err(ProfileError::ProfileDoesNotExist.into());
         }
         Ok(profile)
+    }
+    fn get<T: DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
+        block_on(async move {
+            let token = self.bearer_token().await?;
+            let client = Client::new().get(url.as_str()).bearer_auth(token);
+            let res = client.send().err_into().map(flatten_status).await?;
+            res.json().err_into().await
+        })
+    }
+    fn post<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
+        block_on(async move {
+            let token = self.bearer_token().await?;
+            let client = Client::new().post(url).json(&payload).bearer_auth(token);
+            let res = client.send().err_into().map(flatten_status).await?;
+            res.json().err_into().await
+        })
+    }
+    fn delete<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
+        block_on(async move {
+            let token = self.bearer_token().await?;
+            let client = Client::new().delete(url).json(&payload).bearer_auth(token);
+            let res = client.send().err_into().map(flatten_status).await?;
+            res.json().err_into().await
+        })
     }
 }
 
@@ -103,10 +130,7 @@ impl CisClientTrait for CisClient {
             url.set_query(Some(&format!("nextPage={}", safe_next_page)));
         }
         println!("{}", url.as_str());
-        let token = self.bearer_token()?;
-        let client = Client::new().get(url.as_str()).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?.error_for_status()?;
-        let mut json: Value = res.json()?;
+        let mut json: Value = self.get(url)?;
         let items: Option<Vec<Profile>> = Some(serde_json::from_value(json["Items"].take())?);
         let next_page: Option<NextPage> = serde_json::from_value(json["nextPage"].take()).ok();
         Ok(Batch { items, next_page })
@@ -114,38 +138,34 @@ impl CisClientTrait for CisClient {
 
     fn update_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let token = self.bearer_token()?;
         let mut url = Url::parse(&self.change_api_user_endpoint)?;
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        let client = Client::new().post(url).json(&profile).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(Into::into)
+        self.post(url, profile)
     }
 
     fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error> {
+        let url = Url::parse(&self.change_api_users_endpoint)?;
         for chunk in profiles.chunks(self.batch_size) {
-            let token = self.bearer_token()?;
-            let client = Client::new()
-                .post(&self.change_api_users_endpoint)
-                .json(&chunk)
-                .bearer_auth(token);
-            let mut res: reqwest::Response = client.send()?;
-            res.json()?;
+            self.post(url.clone(), chunk)?;
         }
         Ok(json!({ "status": "all good" }))
     }
 
     fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let token = self.bearer_token()?;
         let mut url = Url::parse(&self.change_api_user_endpoint)?;
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        let client = Client::new().delete(url).json(&profile).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(Into::into)
+        self.delete(url, profile)
     }
 
     fn get_secret_store(&self) -> &SecretStore {
         &self.secret_store
+    }
+}
+
+fn flatten_status(result: Result<Response, Error>) -> Result<Response, Error> {
+    match result {
+        Ok(res) => res.error_for_status().map_err(Into::into),
+        Err(e) => Err(e),
     }
 }

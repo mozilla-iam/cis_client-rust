@@ -5,10 +5,13 @@ use chrono::DateTime;
 use chrono::Utc;
 use failure::Error;
 use futures::future;
-use futures::Future;
-use reqwest::r#async::Client;
+use futures::future::FutureExt;
+use futures::future::TryFutureExt;
+use reqwest::Client;
 use serde_json::Value;
 use shared_expiry_get::Expiry;
+use shared_expiry_get::ExpiryFut;
+use shared_expiry_get::ExpiryGetError;
 use shared_expiry_get::Provider;
 use std::sync::Arc;
 
@@ -37,17 +40,20 @@ impl Auth0 {
 }
 
 impl Provider<BearerBearer> for Auth0 {
-    fn update(&self) -> Box<dyn Future<Item = BearerBearer, Error = Error> + Send> {
-        Box::new(get_raw_access_token(&*self.config).and_then(|token| {
-            let exp = match get_expiration(&token) {
-                Ok(exp) => exp,
-                Err(e) => return future::err(e),
-            };
-            future::ok(BearerBearer {
-                bearer_token_str: token,
-                exp: Arc::new(exp),
+    fn update(&self) -> ExpiryFut<BearerBearer> {
+        get_raw_access_token(Arc::clone(&self.config))
+            .map_err(|e| ExpiryGetError::UpdateFailed(e.to_string()))
+            .and_then(|token| {
+                let exp = match get_expiration(&token) {
+                    Ok(exp) => exp,
+                    Err(e) => return future::err(ExpiryGetError::UpdateFailed(e.to_string())),
+                };
+                future::ok(BearerBearer {
+                    bearer_token_str: token,
+                    exp: Arc::new(exp),
+                })
             })
-        }))
+            .boxed()
     }
 }
 
@@ -62,9 +68,7 @@ fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
     Ok(*exp)
 }
 
-pub fn get_raw_access_token(
-    client_config: &ClientConfig,
-) -> Box<dyn Future<Item = Arc<String>, Error = Error> + Send> {
+pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Arc<String>, Error> {
     let query = &[
         ("client_id", client_config.client_id.as_str()),
         ("client_secret", client_config.client_secret.as_str()),
@@ -77,15 +81,11 @@ pub fn get_raw_access_token(
         .post(&client_config.token_endpoint)
         .form(query)
         .send()
-        .map_err(Into::into);
-    Box::new(
-        res.and_then(|mut r| r.json().map_err(Into::into))
-            .and_then(|j: serde_json::Value| {
-                j["access_token"]
-                    .as_str()
-                    .map(ToOwned::to_owned)
-                    .map(Arc::new)
-                    .ok_or_else(|| TokenError::NoToken.into())
-            }),
-    )
+        .await?;
+    let j = res.json::<Value>().await?;
+    j["access_token"]
+        .as_str()
+        .map(ToOwned::to_owned)
+        .map(Arc::new)
+        .ok_or_else(|| TokenError::NoToken.into())
 }
