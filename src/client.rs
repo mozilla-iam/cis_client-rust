@@ -73,37 +73,17 @@ impl CisClient {
     }
 }
 
+pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>>>>;
+
 pub trait AsyncCisClientTrait {
     type PI: Stream<Item = Vec<Profile>>;
-    fn get_user_by(
-        &self,
-        id: &str,
-        by: &GetBy,
-        filter: Option<&str>,
-    ) -> Box<dyn Future<Output = Result<Profile, Error>>>;
-    fn get_inactive_user_by(
-        &self,
-        id: &str,
-        by: &GetBy,
-        filter: Option<&str>,
-    ) -> Box<dyn Future<Output = Result<Profile, Error>>>;
-    fn get_users_iter(&self, filter: Option<&str>) -> Box<dyn Stream<Item = Self::PI>>;
-    fn get_batch(
-        &self,
-        next_page: &Option<NextPage>,
-        filter: &Option<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<Batch, Error>>>>;
-    fn update_user(
-        &self,
-        id: &str,
-        profile: Profile,
-    ) -> Box<dyn Future<Output = Result<Value, Error>>>;
-    fn update_users(&self, profiles: &[Profile]) -> Box<dyn Future<Output = Result<Value, Error>>>;
-    fn delete_user(
-        &self,
-        id: &str,
-        profile: Profile,
-    ) -> Box<dyn Future<Output = Result<Value, Error>>>;
+    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
+    fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
+    fn get_users_iter(&self, filter: Option<&str>) -> Pin<Box<dyn Stream<Item = Self::PI>>>;
+    fn get_batch(&self, next_page: &Option<NextPage>, filter: &Option<String>) -> CisFut<Batch>;
+    fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
+    fn update_users(&self, profiles: &[Profile]) -> CisFut<Value>;
+    fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
     fn get_secret_store(&self) -> &SecretStore;
 }
 
@@ -163,11 +143,11 @@ impl CisClient {
         by: &GetBy,
         filter: Option<&str>,
         active: bool,
-    ) -> Box<dyn Future<Output = Result<Profile, Error>>> {
+    ) -> CisFut<Profile> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let base = match Url::parse(&self.person_api_user_endpoint) {
             Ok(base) => base,
-            Err(e) => return Box::new(future::err(e.into())),
+            Err(e) => return Box::pin(future::err(e.into())),
         };
         let url = match base
             .join(by.as_str())
@@ -181,9 +161,9 @@ impl CisClient {
                 u
             }) {
             Ok(url) => url,
-            Err(e) => return Box::new(future::err(e.into())),
+            Err(e) => return Box::pin(future::err(e.into())),
         };
-        Box::new(
+        Box::pin(
             send(self.bearer_store.clone(), url).and_then(|profile: Profile| {
                 if profile.uuid.value.is_none() {
                     return future::err(ProfileError::ProfileDoesNotExist.into());
@@ -196,30 +176,16 @@ impl CisClient {
 
 impl AsyncCisClientTrait for CisClient {
     type PI = AsyncProfileIter<CisClient>;
-    fn get_user_by(
-        &self,
-        id: &str,
-        by: &GetBy,
-        filter: Option<&str>,
-    ) -> Box<dyn Future<Output = Result<Profile, Error>>> {
+    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
         self.get_user(id, by, filter, true)
     }
-    fn get_inactive_user_by(
-        &self,
-        id: &str,
-        by: &GetBy,
-        filter: Option<&str>,
-    ) -> Box<dyn Future<Output = Result<Profile, Error>>> {
+    fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
         self.get_user(id, by, filter, false)
     }
-    fn get_users_iter(&self, _filter: Option<&str>) -> Box<dyn Stream<Item = Self::PI>> {
+    fn get_users_iter(&self, _filter: Option<&str>) -> Pin<Box<dyn Stream<Item = Self::PI>>> {
         unimplemented!()
     }
-    fn get_batch(
-        &self,
-        next_page: &Option<NextPage>,
-        filter: &Option<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<Batch, Error>>>> {
+    fn get_batch(&self, next_page: &Option<NextPage>, filter: &Option<String>) -> CisFut<Batch> {
         let mut url = match Url::parse(&self.person_api_users_endpoint) {
             Ok(base) => base,
             Err(e) => return future::err(e.into()).boxed(),
@@ -248,37 +214,26 @@ impl AsyncCisClientTrait for CisClient {
             })
             .boxed()
     }
-    fn update_user(
-        &self,
-        id: &str,
-        profile: Profile,
-    ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+    fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let mut url = match Url::parse(&self.change_api_user_endpoint) {
             Ok(base) => base,
-            Err(e) => return Box::new(future::err(e.into())),
+            Err(e) => return Box::pin(future::err(e.into())),
         };
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        Box::new(post(self.bearer_store.clone(), url, profile))
+        Box::pin(post(self.bearer_store.clone(), url, profile))
     }
-    fn update_users(
-        &self,
-        _profiles: &[Profile],
-    ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+    fn update_users(&self, _profiles: &[Profile]) -> CisFut<Value> {
         unimplemented!()
     }
-    fn delete_user(
-        &self,
-        id: &str,
-        profile: Profile,
-    ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+    fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let mut url = match Url::parse(&self.change_api_user_endpoint) {
             Ok(base) => base,
-            Err(e) => return Box::new(future::err(e.into())),
+            Err(e) => return Box::pin(future::err(e.into())),
         };
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        Box::new(delete(self.bearer_store.clone(), url, profile))
+        Box::pin(delete(self.bearer_store.clone(), url, profile))
     }
     fn get_secret_store(&self) -> &SecretStore {
         &self.secret_store

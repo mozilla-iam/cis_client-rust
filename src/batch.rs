@@ -63,30 +63,28 @@ impl<T: AsyncCisClientTrait> Stream for AsyncProfileIter<T> {
             ProfileIterState::Uninitalized => {
                 let next = Arc::clone(&self.next);
                 *state_update.write().unwrap() = ProfileIterState::Inflight;
-                Future::poll(
-                    Pin::new(
-                        &mut self
-                            .cis_client
-                            .get_batch(&None, &self.filter)
-                            .map_ok(|batch| {
-                                if batch.next_page.is_none() && batch.items.is_empty() {
-                                    None
-                                } else {
-                                    println!("updated init");
-                                    *next.lock().unwrap() = batch.next_page;
-                                    Some(batch.items)
-                                }
-                            })
-                            .map(|res| match res {
-                                Ok(items) => items,
-                                Err(e) => {
-                                    error!("batch error: {}", e);
-                                    None
-                                }
-                            }),
-                    ),
-                    cx,
+                Pin::new(
+                    &mut self
+                        .cis_client
+                        .get_batch(&None, &self.filter)
+                        .map_ok(|batch| {
+                            if batch.next_page.is_none() && batch.items.is_empty() {
+                                None
+                            } else {
+                                println!("updated init");
+                                *next.lock().unwrap() = batch.next_page;
+                                Some(batch.items)
+                            }
+                        })
+                        .map(|res| match res {
+                            Ok(items) => items,
+                            Err(e) => {
+                                error!("batch error: {}", e);
+                                None
+                            }
+                        }),
                 )
+                .poll(cx)
             }
             ProfileIterState::Inflight => {
                 println!("inflight");
@@ -126,6 +124,7 @@ impl<T: AsyncCisClientTrait> Stream for AsyncProfileIter<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::client::CisFut;
     use crate::getby::GetBy;
     use cis_profile::crypto::SecretStore;
     use failure::Error;
@@ -134,19 +133,13 @@ mod test {
     use futures::FutureExt;
     use futures::StreamExt;
     use serde_json::Value;
-    use std::future::Future;
 
     struct CisClientFaker {
         count: usize,
     }
     impl AsyncCisClientTrait for CisClientFaker {
         type PI = AsyncProfileIter<Self>;
-        fn get_user_by(
-            &self,
-            _id: &str,
-            _by: &GetBy,
-            _filter: Option<&str>,
-        ) -> Box<dyn Future<Output = Result<Profile, Error>>> {
+        fn get_user_by(&self, _id: &str, _by: &GetBy, _filter: Option<&str>) -> CisFut<Profile> {
             unimplemented!()
         }
         fn get_inactive_user_by(
@@ -154,17 +147,17 @@ mod test {
             _id: &str,
             _by: &GetBy,
             _filter: Option<&str>,
-        ) -> Box<dyn Future<Output = Result<Profile, Error>>> {
+        ) -> CisFut<Profile> {
             unimplemented!()
         }
-        fn get_users_iter(&self, _filter: Option<&str>) -> Box<dyn Stream<Item = Self::PI>> {
+        fn get_users_iter(&self, _filter: Option<&str>) -> Pin<Box<dyn Stream<Item = Self::PI>>> {
             unimplemented!()
         }
         fn get_batch(
             &self,
             pagination_token: &Option<NextPage>,
             _: &Option<String>,
-        ) -> Pin<Box<dyn Future<Output = Result<Batch, Error>>>> {
+        ) -> CisFut<Batch> {
             if pagination_token.is_none() && self.count == 0 {
                 return future::ok(Batch {
                     items: vec![],
@@ -189,24 +182,13 @@ mod test {
             })
             .boxed();
         }
-        fn update_user(
-            &self,
-            _id: &str,
-            _profile: Profile,
-        ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+        fn update_user(&self, _id: &str, _profile: Profile) -> CisFut<Value> {
             unimplemented!()
         }
-        fn update_users(
-            &self,
-            _profiles: &[Profile],
-        ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+        fn update_users(&self, _profiles: &[Profile]) -> CisFut<Value> {
             unimplemented!()
         }
-        fn delete_user(
-            &self,
-            _id: &str,
-            _profile: Profile,
-        ) -> Box<dyn Future<Output = Result<Value, Error>>> {
+        fn delete_user(&self, _id: &str, _profile: Profile) -> CisFut<Value> {
             unimplemented!()
         }
         fn get_secret_store(&self) -> &SecretStore {
