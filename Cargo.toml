@@ -4,8 +4,12 @@ version = "0.4.0"
 authors = ["Florian Merz <flomerz@gmail.com>"]
 edition = "2018"
 
+[features]
+default = []
+sync = ["reqwest/blocking", "tokio"]
+
 [dependencies]
-shared-expiry-get = { git = "https://github.com/fiji-flo/shared-expiry-get", version = "0.1.0", branch = "0.1.0" }
+shared-expiry-get = "0.1"
 cis_profile = { git = "https://github.com/fiji-flo/cis_profile-rust", version = "0.3.1", branch = "0.3.1", features = ["aws", "vendored", "well_known"] }
 reqwest =  { version = "0.10", features = ["json"] }
 biscuit = "0.4"
@@ -17,5 +21,5 @@ percent-encoding = "2.1"
 failure = "0.1"
 failure_derive = "0.1"
 futures = "0.3"
-tokio = "0.2"
 log = "0.4"
+tokio = { optional = true, version = "0.2" }

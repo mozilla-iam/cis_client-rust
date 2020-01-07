@@ -2,13 +2,13 @@
 extern crate failure_derive;
 
 mod auth;
-pub mod batch;
 mod client;
 mod encoding;
 pub mod error;
 pub mod getby;
 mod secrets;
 pub mod settings;
+#[cfg(feature = "sync")]
 pub mod sync;
 
 pub use client::AsyncCisClientTrait;

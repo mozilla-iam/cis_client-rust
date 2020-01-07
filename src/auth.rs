@@ -41,6 +41,7 @@ impl Auth0 {
 
 impl Provider<BearerBearer> for Auth0 {
     fn update(&self) -> ExpiryFut<BearerBearer> {
+        log::debug!("update");
         get_raw_access_token(Arc::clone(&self.config))
             .map_err(|e| ExpiryGetError::UpdateFailed(e.to_string()))
             .and_then(|token| {
@@ -48,6 +49,7 @@ impl Provider<BearerBearer> for Auth0 {
                     Ok(exp) => exp,
                     Err(e) => return future::err(ExpiryGetError::UpdateFailed(e.to_string())),
                 };
+                log::debug!("bearer");
                 future::ok(BearerBearer {
                     bearer_token_str: token,
                     exp: Arc::new(exp),
@@ -69,6 +71,7 @@ fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
 }
 
 pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Arc<String>, Error> {
+    log::debug!("get raw access token");
     let query = &[
         ("client_id", client_config.client_id.as_str()),
         ("client_secret", client_config.client_secret.as_str()),
@@ -82,7 +85,9 @@ pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Ar
         .form(query)
         .send()
         .await?;
+    log::debug!("got raw res");
     let j = res.json::<Value>().await?;
+    log::debug!("got raw access token");
     j["access_token"]
         .as_str()
         .map(ToOwned::to_owned)

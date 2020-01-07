@@ -8,12 +8,9 @@ use crate::sync::batch::ProfileIter;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
 use failure::Error;
-use futures::executor::block_on;
-use futures::future::FutureExt;
-use futures::future::TryFutureExt;
+use log::info;
 use percent_encoding::utf8_percent_encode;
-use reqwest::Client;
-use reqwest::Response;
+use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -69,28 +66,22 @@ impl CisClient {
         Ok(profile)
     }
     fn get<T: DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
-        block_on(async move {
-            let token = self.bearer_token().await?;
-            let client = Client::new().get(url.as_str()).bearer_auth(token);
-            let res = client.send().err_into().map(flatten_status).await?;
-            res.json().err_into().await
-        })
+        let token = self.bearer_token_sync()?;
+        let client = Client::new().get(url.as_str()).bearer_auth(token);
+        let res = client.send()?.error_for_status()?;
+        res.json().map_err(Into::into)
     }
     fn post<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
-        block_on(async move {
-            let token = self.bearer_token().await?;
-            let client = Client::new().post(url).json(&payload).bearer_auth(token);
-            let res = client.send().err_into().map(flatten_status).await?;
-            res.json().err_into().await
-        })
+        let token = self.bearer_token_sync()?;
+        let client = Client::new().post(url).json(&payload).bearer_auth(token);
+        let res = client.send()?.error_for_status()?;
+        res.json().map_err(Into::into)
     }
     fn delete<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
-        block_on(async move {
-            let token = self.bearer_token().await?;
-            let client = Client::new().delete(url).json(&payload).bearer_auth(token);
-            let res = client.send().err_into().map(flatten_status).await?;
-            res.json().err_into().await
-        })
+        let token = self.bearer_token_sync()?;
+        let client = Client::new().delete(url).json(&payload).bearer_auth(token);
+        let res = client.send()?.error_for_status()?;
+        res.json().map_err(Into::into)
     }
 }
 
@@ -129,9 +120,18 @@ impl CisClientTrait for CisClient {
                 utf8_percent_encode(&next_page_json, USERINFO_ENCODE_SET).to_string();
             url.set_query(Some(&format!("nextPage={}", safe_next_page)));
         }
-        println!("{}", url.as_str());
+        info!("{}", url.as_str());
         let mut json: Value = self.get(url)?;
-        let items: Option<Vec<Profile>> = Some(serde_json::from_value(json["Items"].take())?);
+        let raw_items: Value = json["Items"].take();
+        let items: Option<Vec<Profile>> = match raw_items {
+            Value::Array(items) => Some(
+                items
+                    .into_iter()
+                    .filter_map(|item| serde_json::from_value::<Profile>(item).ok())
+                    .collect(),
+            ),
+            _ => None,
+        };
         let next_page: Option<NextPage> = serde_json::from_value(json["nextPage"].take()).ok();
         Ok(Batch { items, next_page })
     }
@@ -160,12 +160,5 @@ impl CisClientTrait for CisClient {
 
     fn get_secret_store(&self) -> &SecretStore {
         &self.secret_store
-    }
-}
-
-fn flatten_status(result: Result<Response, Error>) -> Result<Response, Error> {
-    match result {
-        Ok(res) => res.error_for_status().map_err(Into::into),
-        Err(e) => Err(e),
     }
 }

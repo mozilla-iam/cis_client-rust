@@ -1,8 +1,5 @@
 use crate::auth::Auth0;
 use crate::auth::BearerBearer;
-use crate::batch::AsyncProfileIter;
-use crate::batch::Batch;
-use crate::batch::NextPage;
 use crate::encoding::USERINFO_ENCODE_SET;
 use crate::error::ProfileError;
 use crate::getby::GetBy;
@@ -14,7 +11,6 @@ use failure::Error;
 use futures::future;
 use futures::future::FutureExt;
 use futures::future::TryFutureExt;
-use futures::stream::Stream;
 use futures::Future;
 use percent_encoding::utf8_percent_encode;
 use reqwest::Client;
@@ -71,16 +67,20 @@ impl CisClient {
         let b = self.bearer_store.get().await?;
         Ok((*b.bearer_token_str).to_owned())
     }
+
+    #[cfg(feature = "sync")]
+    pub fn bearer_token_sync(&self) -> Result<String, Error> {
+        use tokio::runtime::Runtime;
+        let mut rt = Runtime::new()?;
+        rt.block_on(self.bearer_token())
+    }
 }
 
-pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>>>>;
+pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>;
 
 pub trait AsyncCisClientTrait {
-    type PI: Stream<Item = Vec<Profile>>;
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
     fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
-    fn get_users_iter(&self, filter: Option<&str>) -> Pin<Box<dyn Stream<Item = Self::PI>>>;
-    fn get_batch(&self, next_page: &Option<NextPage>, filter: &Option<String>) -> CisFut<Batch>;
     fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
     fn update_users(&self, profiles: &[Profile]) -> CisFut<Value>;
     fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
@@ -91,7 +91,9 @@ async fn send<T: DeserializeOwned>(
     bearer_store: RemoteStore<BearerBearer, Auth0>,
     url: Url,
 ) -> Result<T, Error> {
+    log::debug!("getting token");
     let token = bearer_store.get().await?;
+    log::debug!("got token");
     let res = Client::new()
         .get(url.as_str())
         .bearer_auth(token.bearer_token_str)
@@ -175,44 +177,11 @@ impl CisClient {
 }
 
 impl AsyncCisClientTrait for CisClient {
-    type PI = AsyncProfileIter<CisClient>;
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
         self.get_user(id, by, filter, true)
     }
     fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
         self.get_user(id, by, filter, false)
-    }
-    fn get_users_iter(&self, _filter: Option<&str>) -> Pin<Box<dyn Stream<Item = Self::PI>>> {
-        unimplemented!()
-    }
-    fn get_batch(&self, next_page: &Option<NextPage>, filter: &Option<String>) -> CisFut<Batch> {
-        let mut url = match Url::parse(&self.person_api_users_endpoint) {
-            Ok(base) => base,
-            Err(e) => return future::err(e.into()).boxed(),
-        };
-        if let Some(df) = filter {
-            url.query_pairs_mut().append_pair("filterDisplay", df);
-        }
-        if let Some(next_page_token) = next_page {
-            let next_page_json = match serde_json::to_string(next_page_token) {
-                Ok(next_page_json) => next_page_json,
-                Err(e) => return future::err(e.into()).boxed(),
-            };
-            let safe_next_page =
-                utf8_percent_encode(&next_page_json, USERINFO_ENCODE_SET).to_string();
-            url.set_query(Some(&format!("nextPage={}", safe_next_page)));
-        }
-        send(self.bearer_store.clone(), url)
-            .and_then(|mut json: Value| {
-                let items: Vec<Profile> = match serde_json::from_value(json["Items"].take()) {
-                    Ok(item) => item,
-                    Err(e) => return future::err(e.into()),
-                };
-                let next_page: Option<NextPage> =
-                    serde_json::from_value(json["nextPage"].take()).ok();
-                future::ok(Batch { items, next_page })
-            })
-            .boxed()
     }
     fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
