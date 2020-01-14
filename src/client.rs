@@ -1,61 +1,33 @@
+use crate::auth::Auth0;
 use crate::auth::BearerBearer;
-use crate::batch::Batch;
-use crate::batch::NextPage;
-use crate::batch::ProfileIter;
+use crate::encoding::USERINFO_ENCODE_SET;
 use crate::error::ProfileError;
+use crate::getby::GetBy;
 use crate::secrets::get_store_from_settings;
 use crate::settings::CisSettings;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
-use condvar_store::CondvarStore;
-use condvar_store::CondvarStoreError;
 use failure::Error;
+use futures::future;
+use futures::future::FutureExt;
+use futures::future::TryFutureExt;
+use futures::Future;
 use percent_encoding::utf8_percent_encode;
-use percent_encoding::USERINFO_ENCODE_SET;
 use reqwest::Client;
+use reqwest::Response;
 use reqwest::Url;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
+use shared_expiry_get::RemoteStore;
+use std::pin::Pin;
 use std::sync::Arc;
 
 static DEFAULT_BATCH_SIZE: usize = 25;
 
-#[allow(dead_code)]
-pub enum GetBy {
-    Uuid,
-    UserId,
-    PrimaryEmail,
-    PrimaryUsername,
-}
-
-impl GetBy {
-    pub fn as_str(self: &GetBy) -> &'static str {
-        match self {
-            GetBy::Uuid => "uuid/",
-            GetBy::UserId => "user_id/",
-            GetBy::PrimaryEmail => "primary_email/",
-            GetBy::PrimaryUsername => "primary_username/",
-        }
-    }
-}
-
-pub trait CisClientTrait {
-    type PI: Iterator<Item = Result<Vec<Profile>, Error>>;
-    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error>;
-    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error>;
-    fn get_batch(
-        &self,
-        next_page: &Option<NextPage>,
-        filter: &Option<String>,
-    ) -> Result<Batch, Error>;
-    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, Error>;
-    fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error>;
-    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, Error>;
-    fn get_secret_store(&self) -> &SecretStore;
-}
-
 #[derive(Clone)]
 pub struct CisClient {
-    pub bearer_store: CondvarStore<BearerBearer>,
+    pub bearer_store: RemoteStore<BearerBearer, Auth0>,
     pub person_api_user_endpoint: String,
     pub person_api_users_endpoint: String,
     pub change_api_user_endpoint: String,
@@ -66,7 +38,7 @@ pub struct CisClient {
 
 impl CisClient {
     pub fn from_settings(settings: &CisSettings) -> Result<Self, Error> {
-        let bearer_store = CondvarStore::new(BearerBearer::new(settings.client_config.clone()));
+        let bearer_store = RemoteStore::new(Auth0::new(settings.client_config.clone()));
         let secret_store = get_store_from_settings(settings)?;
         Ok(CisClient {
             bearer_store,
@@ -91,103 +63,155 @@ impl CisClient {
         })
     }
 
-    pub fn bearer_token(&self) -> Result<String, Error> {
-        let b = self.bearer_store.get()?;
-        let b1 = b
-            .read()
-            .map_err(|e| CondvarStoreError::PoisonedLock(e.to_string()))?;
-        Ok((*b1.bearer_token_str).to_owned())
+    pub async fn bearer_token(&self) -> Result<String, Error> {
+        let b = self.bearer_store.get().await?;
+        Ok((*b.bearer_token_str).to_owned())
+    }
+
+    #[cfg(feature = "sync")]
+    pub fn bearer_token_sync(&self) -> Result<String, Error> {
+        use tokio::runtime::Runtime;
+        let mut rt = Runtime::new()?;
+        rt.block_on(self.bearer_token())
     }
 }
 
-impl CisClientTrait for CisClient {
-    type PI = ProfileIter<CisClient>;
-    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error> {
+pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>;
+
+pub trait AsyncCisClientTrait {
+    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
+    fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
+    fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
+    fn update_users(&self, profiles: &[Profile]) -> CisFut<Value>;
+    fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
+    fn get_secret_store(&self) -> &SecretStore;
+}
+
+async fn send<T: DeserializeOwned>(
+    bearer_store: RemoteStore<BearerBearer, Auth0>,
+    url: Url,
+) -> Result<T, Error> {
+    log::debug!("getting token");
+    let token = bearer_store.get().await?;
+    log::debug!("got token");
+    let res = Client::new()
+        .get(url.as_str())
+        .bearer_auth(token.bearer_token_str)
+        .send()
+        .err_into()
+        .map(flatten_status)
+        .await?;
+    res.json().err_into().await
+}
+
+async fn post<T: DeserializeOwned>(
+    bearer_store: RemoteStore<BearerBearer, Auth0>,
+    url: Url,
+    payload: impl Serialize,
+) -> Result<T, Error> {
+    let token = bearer_store.get().await?;
+    let res = Client::new()
+        .post(url.as_str())
+        .json(&payload)
+        .bearer_auth(token.bearer_token_str)
+        .send()
+        .err_into()
+        .map(flatten_status)
+        .await?;
+    res.json().err_into().await
+}
+
+async fn delete<T: DeserializeOwned>(
+    bearer_store: RemoteStore<BearerBearer, Auth0>,
+    url: Url,
+    payload: impl Serialize,
+) -> Result<T, Error> {
+    let token = bearer_store.get().await?;
+    let res = Client::new()
+        .delete(url.as_str())
+        .json(&payload)
+        .bearer_auth(token.bearer_token_str)
+        .send()
+        .err_into()
+        .map(flatten_status)
+        .await?;
+    res.json().err_into().await
+}
+
+impl CisClient {
+    fn get_user(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+        active: bool,
+    ) -> CisFut<Profile> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let base = Url::parse(&self.person_api_user_endpoint)?;
-        let url = base
+        let base = match Url::parse(&self.person_api_user_endpoint) {
+            Ok(base) => base,
+            Err(e) => return Box::pin(future::err(e.into())),
+        };
+        let url = match base
             .join(by.as_str())
             .and_then(|u| u.join(&safe_id))
             .map(|mut u| {
                 if let Some(df) = filter {
-                    u.set_query(Some(&format!("filterDisplay={}", df.to_string())))
+                    u.query_pairs_mut().append_pair("filterDisplay", df);
                 }
+                u.query_pairs_mut()
+                    .append_pair("active", &active.to_string());
                 u
-            })?;
-        let token = self.bearer_token()?;
-        let client = Client::new().get(url.as_str()).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?.error_for_status()?;
-        let profile: Profile = res.json()?;
-        if profile.uuid.value.is_none() {
-            return Err(ProfileError::ProfileDoesNotExist.into());
-        }
-        Ok(profile)
+            }) {
+            Ok(url) => url,
+            Err(e) => return Box::pin(future::err(e.into())),
+        };
+        Box::pin(
+            send(self.bearer_store.clone(), url).and_then(|profile: Profile| {
+                if profile.uuid.value.is_none() {
+                    return future::err(ProfileError::ProfileDoesNotExist.into());
+                }
+                future::ok(profile)
+            }),
+        )
     }
+}
 
-    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error> {
-        let p = ProfileIter::new(self.clone(), filter.map(String::from));
-        Ok(p)
+impl AsyncCisClientTrait for CisClient {
+    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
+        self.get_user(id, by, filter, true)
     }
-
-    fn get_batch(
-        &self,
-        next_page: &Option<NextPage>,
-        filter: &Option<String>,
-    ) -> Result<Batch, Error> {
-        let mut url = Url::parse(&self.person_api_users_endpoint)?;
-        if let Some(df) = filter {
-            url.set_query(Some(&format!("filterDisplay={}", df.to_string())))
-        }
-        if let Some(next_page_token) = next_page {
-            let next_page_json = serde_json::to_string(next_page_token)?;
-            let safe_next_page =
-                utf8_percent_encode(&next_page_json, USERINFO_ENCODE_SET).to_string();
-            url.set_query(Some(&format!("nextPage={}", safe_next_page)));
-        }
-        println!("{}", url.as_str());
-        let token = self.bearer_token()?;
-        let client = Client::new().get(url.as_str()).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?.error_for_status()?;
-        let mut json: Value = res.json()?;
-        let items: Option<Vec<Profile>> = Some(serde_json::from_value(json["Items"].take())?);
-        let next_page: Option<NextPage> = serde_json::from_value(json["nextPage"].take()).ok();
-        Ok(Batch { items, next_page })
+    fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
+        self.get_user(id, by, filter, false)
     }
-
-    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
+    fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let token = self.bearer_token()?;
-        let mut url = Url::parse(&self.change_api_user_endpoint)?;
+        let mut url = match Url::parse(&self.change_api_user_endpoint) {
+            Ok(base) => base,
+            Err(e) => return Box::pin(future::err(e.into())),
+        };
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        let client = Client::new().post(url).json(&profile).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(Into::into)
+        Box::pin(post(self.bearer_store.clone(), url, profile))
     }
-
-    fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error> {
-        for chunk in profiles.chunks(self.batch_size) {
-            let token = self.bearer_token()?;
-            let client = Client::new()
-                .post(&self.change_api_users_endpoint)
-                .json(&chunk)
-                .bearer_auth(token);
-            let mut res: reqwest::Response = client.send()?;
-            res.json()?;
-        }
-        Ok(json!({ "status": "all good" }))
+    fn update_users(&self, _profiles: &[Profile]) -> CisFut<Value> {
+        unimplemented!()
     }
-
-    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
+    fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let token = self.bearer_token()?;
-        let mut url = Url::parse(&self.change_api_user_endpoint)?;
+        let mut url = match Url::parse(&self.change_api_user_endpoint) {
+            Ok(base) => base,
+            Err(e) => return Box::pin(future::err(e.into())),
+        };
         url.set_query(Some(&format!("user_id={}", safe_id)));
-        let client = Client::new().delete(url).json(&profile).bearer_auth(token);
-        let mut res: reqwest::Response = client.send()?;
-        res.json().map_err(Into::into)
+        Box::pin(delete(self.bearer_store.clone(), url, profile))
     }
-
     fn get_secret_store(&self) -> &SecretStore {
         &self.secret_store
+    }
+}
+
+fn flatten_status(result: Result<Response, Error>) -> Result<Response, Error> {
+    match result {
+        Ok(res) => res.error_for_status().map_err(Into::into),
+        Err(e) => Err(e),
     }
 }

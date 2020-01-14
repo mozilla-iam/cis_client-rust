@@ -1,5 +1,5 @@
 # CIS client lib for Rust
-[![Build Status](https://travis-ci.org/fiji-flo/cis_client-rust.svg?branch=master)](https://travis-ci.org/fiji-flo/cis_client-rust)
+[![Build Status](https://travis-ci.org/mozilla-iam/cis_client-rust.svg?branch=master)](https://travis-ci.org/mozilla-iam/cis_client-rust)
 
 Making interactons with [CIS](https://github.com/mozilla-iam/cis/) easy and safe.
 

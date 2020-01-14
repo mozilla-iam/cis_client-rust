@@ -1,7 +1,9 @@
-use crate::client::CisClientTrait;
 use crate::error::ProfileIterError;
+use crate::sync::client::CisClientTrait;
 use cis_profile::schema::Profile;
 use failure::Error;
+use serde::Deserialize;
+use serde::Serialize;
 use std::iter::Iterator;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -40,10 +42,6 @@ impl<T> ProfileIter<T> {
             current_batch: None,
             state: ProfileIterState::Uninitalized,
         }
-    }
-
-    pub fn is_err(&self) -> bool {
-        self.state == ProfileIterState::Error
     }
 }
 
@@ -96,7 +94,7 @@ impl<T: CisClientTrait> Iterator for ProfileIter<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::client::GetBy;
+    use crate::getby::GetBy;
     use cis_profile::crypto::SecretStore;
     use serde_json::Value;
 
@@ -106,6 +104,14 @@ mod test {
     impl CisClientTrait for CisClientFaker {
         type PI = ProfileIter<Self>;
         fn get_user_by(&self, _: &str, _: &GetBy, _: Option<&str>) -> Result<Profile, Error> {
+            unimplemented!()
+        }
+        fn get_inactive_user_by(
+            &self,
+            _: &str,
+            _: &GetBy,
+            _: Option<&str>,
+        ) -> Result<Profile, Error> {
             unimplemented!()
         }
         fn get_users_iter(&self, _: Option<&str>) -> Result<Self::PI, Error> {
@@ -156,7 +162,6 @@ mod test {
     fn test_profile_iter_empty() -> Result<(), Error> {
         let mut iter = ProfileIter::new(CisClientFaker { count: 0 }, None);
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 
@@ -165,7 +170,6 @@ mod test {
         let mut iter = ProfileIter::new(CisClientFaker { count: 1 }, None);
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 
@@ -175,7 +179,6 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
-        assert!(!iter.is_err());
         Ok(())
     }
 }
