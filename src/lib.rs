@@ -13,3 +13,4 @@ pub mod sync;
 
 pub use client::AsyncCisClientTrait;
 pub use client::CisClient;
+pub use client::CisFut;
