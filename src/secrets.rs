@@ -7,12 +7,12 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 
-pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Error> {
+pub async fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Error> {
     let mut store = SecretStore::default();
     store = match settings.sign_keys.source.as_str() {
         "none" => store,
         "file" => add_sign_keys_from_files(&settings.sign_keys, store)?,
-        "ssm" => add_sign_keys_from_ssm(&settings.sign_keys, store)?,
+        "ssm" => add_sign_keys_from_ssm(&settings.sign_keys, store).await?,
         _ => return Err(SecretsError::UseNoneFileSsm.into()),
     };
     store = match (
@@ -21,8 +21,8 @@ pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Er
     ) {
         ("none", _) => store,
         ("file", _) => add_verify_keys_from_files(&settings.verify_keys, store)?,
-        ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store)?,
-        ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url)?,
+        ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store).await?,
+        ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url).await?,
         _ => {
             return Err(SecretsError::UseNoneFileSsmWellKnonw.into());
         }
@@ -30,14 +30,17 @@ pub fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Er
     Ok(store)
 }
 
-pub fn add_sign_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
+pub async fn add_sign_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys);
-    store.with_sign_keys_from_ssm_iter(key_tuples)
+    store.with_sign_keys_from_ssm_iter(key_tuples).await
 }
 
-pub fn add_verify_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
+pub async fn add_verify_keys_from_ssm(
+    keys: &Keys,
+    store: SecretStore,
+) -> Result<SecretStore, Error> {
     let key_tuples = get_key_tuples(keys);
-    store.with_verify_keys_from_ssm_iter(key_tuples)
+    store.with_verify_keys_from_ssm_iter(key_tuples).await
 }
 
 pub fn add_sign_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
@@ -81,19 +84,20 @@ fn read_file(file_name: &str) -> Result<String, Error> {
 mod test {
     use super::*;
 
-    #[test]
-    fn secret_store_from_empty() -> Result<(), Error> {
+    #[tokio::test]
+    async fn secret_store_from_empty() -> Result<(), Error> {
         let cis_settings = CisSettings::default();
-        assert!(get_store_from_settings(&cis_settings).is_err());
+        assert!(get_store_from_settings(&cis_settings).await.is_err());
         Ok(())
     }
-    #[test]
-    fn secret_store_from_empty_with_none_setting() -> Result<(), Error> {
+
+    #[tokio::test]
+    async fn secret_store_from_empty_with_none_setting() -> Result<(), Error> {
         let mut cis_settings = CisSettings::default();
         cis_settings.sign_keys.source = String::from("none");
         cis_settings.verify_keys.source = String::from("none");
 
-        assert!(get_store_from_settings(&cis_settings).is_ok());
+        assert!(get_store_from_settings(&cis_settings).await.is_ok());
         Ok(())
     }
 

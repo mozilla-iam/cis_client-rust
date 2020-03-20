@@ -37,9 +37,9 @@ pub struct CisClient {
 }
 
 impl CisClient {
-    pub fn from_settings(settings: &CisSettings) -> Result<Self, Error> {
+    pub async fn from_settings(settings: &CisSettings) -> Result<Self, Error> {
         let bearer_store = RemoteStore::new(Auth0::new(settings.client_config.clone()));
-        let secret_store = get_store_from_settings(settings)?;
+        let secret_store = get_store_from_settings(settings).await?;
         Ok(CisClient {
             bearer_store,
             person_api_user_endpoint: settings
@@ -61,6 +61,12 @@ impl CisClient {
             secret_store: Arc::new(secret_store),
             batch_size: DEFAULT_BATCH_SIZE,
         })
+    }
+    #[cfg(feature = "sync")]
+    pub fn from_settings_sync(settings: &CisSettings) -> Result<Self, Error> {
+        use tokio::runtime::Runtime;
+        let mut rt = Runtime::new()?;
+        rt.block_on(Self::from_settings(settings))
     }
 
     pub async fn bearer_token(&self) -> Result<String, Error> {
