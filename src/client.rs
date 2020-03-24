@@ -159,7 +159,7 @@ impl CisClient {
         };
         let url = match base
             .join(by.as_str())
-            .and_then(|u| u.join(&safe_id))
+            .and_then(|u| u.join(safe_id.trim_start_matches('.')))
             .map(|mut u| {
                 if let Some(df) = filter {
                     u.query_pairs_mut().append_pair("filterDisplay", df);
