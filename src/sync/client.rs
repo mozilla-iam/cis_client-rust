@@ -26,6 +26,8 @@ pub trait CisClientTrait {
         by: &GetBy,
         filter: Option<&str>,
     ) -> Result<Profile, Error>;
+    fn get_any_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>)
+        -> Result<Profile, Error>;
     fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error>;
     fn get_batch(
         &self,
@@ -44,8 +46,12 @@ impl CisClient {
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-        active: bool,
+        active: Option<bool>,
     ) -> Result<Profile, Error> {
+        let active = match active {
+            None => String::from("any"),
+            Some(b) => b.to_string(),
+        };
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let base = Url::parse(&self.person_api_user_endpoint)?;
         let url = base
@@ -55,8 +61,7 @@ impl CisClient {
                 if let Some(df) = filter {
                     u.query_pairs_mut().append_pair("filterDisplay", df);
                 }
-                u.query_pairs_mut()
-                    .append_pair("active", &active.to_string());
+                u.query_pairs_mut().append_pair("active", &active);
                 u
             })?;
         let profile: Profile = self.get(url)?;
@@ -94,10 +99,18 @@ impl CisClientTrait for CisClient {
         by: &GetBy,
         filter: Option<&str>,
     ) -> Result<Profile, Error> {
-        self.get_user_sync(id, by, filter, false)
+        self.get_user_sync(id, by, filter, Some(false))
+    }
+    fn get_any_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, Error> {
+        self.get_user_sync(id, by, filter, None)
     }
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error> {
-        self.get_user_sync(id, by, filter, true)
+        self.get_user_sync(id, by, filter, Some(true))
     }
 
     fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error> {

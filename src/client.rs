@@ -87,6 +87,7 @@ pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>;
 pub trait AsyncCisClientTrait {
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
     fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
+    fn get_any_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
     fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
     fn update_users(&self, profiles: &[Profile]) -> CisFut<Value>;
     fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value>;
@@ -150,8 +151,12 @@ impl CisClient {
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-        active: bool,
+        active: Option<bool>,
     ) -> CisFut<Profile> {
+        let active = match active {
+            None => String::from("any"),
+            Some(b) => b.to_string(),
+        };
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
         let base = match Url::parse(&self.person_api_user_endpoint) {
             Ok(base) => base,
@@ -164,8 +169,7 @@ impl CisClient {
                 if let Some(df) = filter {
                     u.query_pairs_mut().append_pair("filterDisplay", df);
                 }
-                u.query_pairs_mut()
-                    .append_pair("active", &active.to_string());
+                u.query_pairs_mut().append_pair("active", &active);
                 u
             }) {
             Ok(url) => url,
@@ -184,10 +188,13 @@ impl CisClient {
 
 impl AsyncCisClientTrait for CisClient {
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
-        self.get_user(id, by, filter, true)
+        self.get_user(id, by, filter, Some(true))
     }
     fn get_inactive_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
-        self.get_user(id, by, filter, false)
+        self.get_user(id, by, filter, Some(false))
+    }
+    fn get_any_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile> {
+        self.get_user(id, by, filter, None)
     }
     fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
