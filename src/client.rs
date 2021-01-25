@@ -65,7 +65,7 @@ impl CisClient {
     #[cfg(feature = "sync")]
     pub fn from_settings_sync(settings: &CisSettings) -> Result<Self, Error> {
         use tokio::runtime::Runtime;
-        let mut rt = Runtime::new()?;
+        let rt = Runtime::new()?;
         rt.block_on(Self::from_settings(settings))
     }
 
@@ -77,7 +77,7 @@ impl CisClient {
     #[cfg(feature = "sync")]
     pub fn bearer_token_sync(&self) -> Result<String, Error> {
         use tokio::runtime::Runtime;
-        let mut rt = Runtime::new()?;
+        let rt = Runtime::new()?;
         rt.block_on(self.bearer_token())
     }
 }
