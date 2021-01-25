@@ -11,7 +11,7 @@ sync = ["reqwest/blocking", "tokio"]
 [dependencies]
 shared-expiry-get = "0.1"
 cis_profile = { git = "https://github.com/mozilla-iam/cis_profile-rust", version = "0.5", branch = "0.5", features = ["aws", "vendored", "well_known"] }
-reqwest =  { version = "0.11", features = ["json"] }
+reqwest =  { version = "0.10", features = ["json"] }
 biscuit = "0.5"
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -21,7 +21,7 @@ failure = "0.1"
 failure_derive = "0.1"
 futures = "0.3"
 log = "0.4"
-tokio = { optional = true, version = "1" }
+tokio = { optional = true, version = "0.3" }
 
 [dev-dependencies]
-tokio = "1"
+tokio = { version = "0.3", features = ["full"] }
