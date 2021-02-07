@@ -3,7 +3,6 @@ use crate::settings::ClientConfig;
 use biscuit::jws;
 use chrono::DateTime;
 use chrono::Utc;
-use failure::Error;
 use futures::future;
 use futures::future::FutureExt;
 use futures::future::TryFutureExt;
@@ -59,15 +58,17 @@ impl Provider<BearerBearer> for Auth0 {
     }
 }
 
-fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
+fn get_expiration(token: &str) -> Result<DateTime<Utc>, TokenError> {
     let c: jws::Compact<biscuit::ClaimsSet<Value>, biscuit::Empty> =
         jws::Compact::new_encoded(&token);
-    let payload = c.unverified_payload()?;
+    let payload = c.unverified_payload().map_err(|_| TokenError::NoExpiry)?;
     let exp = payload.registered.expiry.ok_or(TokenError::NoExpiry)?;
     Ok(*exp)
 }
 
-pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Arc<String>, Error> {
+pub async fn get_raw_access_token(
+    client_config: Arc<ClientConfig>,
+) -> Result<Arc<String>, TokenError> {
     log::debug!("get raw access token");
     let query = &[
         ("client_id", client_config.client_id.as_str()),
@@ -78,7 +79,7 @@ pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Ar
     ];
     let client = Client::new();
     let res = client
-        .post(&client_config.token_endpoint)
+        .post(client_config.token_endpoint.clone())
         .form(query)
         .send()
         .await?;
@@ -89,5 +90,5 @@ pub async fn get_raw_access_token(client_config: Arc<ClientConfig>) -> Result<Ar
         .as_str()
         .map(ToOwned::to_owned)
         .map(Arc::new)
-        .ok_or_else(|| TokenError::NoToken.into())
+        .ok_or(TokenError::NoToken)
 }

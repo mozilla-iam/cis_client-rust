@@ -1,62 +1,83 @@
 use crate::error::SecretsError;
 use crate::settings::CisSettings;
+use crate::settings::KeySource;
 use crate::settings::Keys;
 use cis_profile::crypto::SecretStore;
-use failure::Error;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 
-pub async fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, Error> {
+pub async fn get_store_from_settings(settings: &CisSettings) -> Result<SecretStore, SecretsError> {
     let mut store = SecretStore::default();
-    store = match settings.sign_keys.source.as_str() {
-        "none" => store,
-        "file" => add_sign_keys_from_files(&settings.sign_keys, store)?,
-        "ssm" => add_sign_keys_from_ssm(&settings.sign_keys, store).await?,
-        _ => return Err(SecretsError::UseNoneFileSsm.into()),
+    store = match settings.sign_keys.source {
+        KeySource::None => store,
+        KeySource::File => add_sign_keys_from_files(&settings.sign_keys, store)?,
+        KeySource::Ssm => add_sign_keys_from_ssm(&settings.sign_keys, store).await?,
+        _ => return Err(SecretsError::UseNoneFileSsm),
     };
     store = match (
-        settings.verify_keys.source.as_str(),
+        &settings.verify_keys.source,
         &settings.verify_keys.well_known_iam_endpoint,
     ) {
-        ("none", _) => store,
-        ("file", _) => add_verify_keys_from_files(&settings.verify_keys, store)?,
-        ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store).await?,
-        ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url).await?,
+        (KeySource::None, _) => store,
+        (KeySource::File, _) => add_verify_keys_from_files(&settings.verify_keys, store)?,
+        (KeySource::Ssm, _) => add_verify_keys_from_ssm(&settings.verify_keys, store).await?,
+        (KeySource::WellKnown, Some(url)) => {
+            store.with_verify_keys_from_well_known(url.as_str()).await?
+        }
         _ => {
-            return Err(SecretsError::UseNoneFileSsmWellKnonw.into());
+            return Err(SecretsError::UseNoneFileSsmWellKnonw);
         }
     };
     Ok(store)
 }
 
-pub async fn add_sign_keys_from_ssm(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
+pub async fn add_sign_keys_from_ssm(
+    keys: &Keys,
+    store: SecretStore,
+) -> Result<SecretStore, SecretsError> {
     let key_tuples = get_key_tuples(keys);
-    store.with_sign_keys_from_ssm_iter(key_tuples).await
+    store
+        .with_sign_keys_from_ssm_iter(key_tuples)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn add_verify_keys_from_ssm(
     keys: &Keys,
     store: SecretStore,
-) -> Result<SecretStore, Error> {
+) -> Result<SecretStore, SecretsError> {
     let key_tuples = get_key_tuples(keys);
-    store.with_verify_keys_from_ssm_iter(key_tuples).await
+    store
+        .with_verify_keys_from_ssm_iter(key_tuples)
+        .await
+        .map_err(Into::into)
 }
 
-pub fn add_sign_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
+pub fn add_sign_keys_from_files(
+    keys: &Keys,
+    store: SecretStore,
+) -> Result<SecretStore, SecretsError> {
     let key_tuples = get_key_tuples(keys)
         .into_iter()
         .map(|(k, v)| read_file(&v).map(|content| (k, content)))
-        .collect::<Result<Vec<(String, String)>, Error>>()?;
-    store.with_sign_keys_from_inline_iter(key_tuples)
+        .collect::<Result<Vec<(String, String)>, SecretsError>>()?;
+    store
+        .with_sign_keys_from_inline_iter(key_tuples)
+        .map_err(Into::into)
 }
 
-pub fn add_verify_keys_from_files(keys: &Keys, store: SecretStore) -> Result<SecretStore, Error> {
+pub fn add_verify_keys_from_files(
+    keys: &Keys,
+    store: SecretStore,
+) -> Result<SecretStore, SecretsError> {
     let key_tuples = get_key_tuples(keys)
         .into_iter()
         .map(|(k, v)| read_file(&v).map(|content| (k, content)))
-        .collect::<Result<Vec<(String, String)>, Error>>()?;
-    store.with_verify_keys_from_inline_iter(key_tuples)
+        .collect::<Result<Vec<(String, String)>, SecretsError>>()?;
+    store
+        .with_verify_keys_from_inline_iter(key_tuples)
+        .map_err(Into::into)
 }
 
 fn get_key_tuples(keys: &Keys) -> Vec<(String, String)> {
@@ -72,31 +93,24 @@ fn get_key_tuples(keys: &Keys) -> Vec<(String, String)> {
     .collect()
 }
 
-fn read_file(file_name: &str) -> Result<String, Error> {
-    let file = File::open(file_name)?;
+fn read_file(file_name: &str) -> Result<String, SecretsError> {
+    let file = File::open(file_name).map_err(|_| SecretsError::FileReadError)?;
     let mut buf_reader = BufReader::new(file);
     let mut content = String::new();
-    buf_reader.read_to_string(&mut content)?;
+    buf_reader
+        .read_to_string(&mut content)
+        .map_err(|_| SecretsError::FileReadError)?;
     Ok(content)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[tokio::test]
-    async fn secret_store_from_empty() -> Result<(), Error> {
-        let cis_settings = CisSettings::default();
-        assert!(get_store_from_settings(&cis_settings).await.is_err());
-        Ok(())
-    }
+    use anyhow::Error;
 
     #[tokio::test]
     async fn secret_store_from_empty_with_none_setting() -> Result<(), Error> {
-        let mut cis_settings = CisSettings::default();
-        cis_settings.sign_keys.source = String::from("none");
-        cis_settings.verify_keys.source = String::from("none");
-
+        let cis_settings = CisSettings::default();
         assert!(get_store_from_settings(&cis_settings).await.is_ok());
         Ok(())
     }

@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate failure_derive;
-
 mod auth;
 mod client;
 mod encoding;

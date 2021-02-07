@@ -1,13 +1,13 @@
 use crate::auth::Auth0;
 use crate::auth::BearerBearer;
 use crate::encoding::USERINFO_ENCODE_SET;
+use crate::error::CisClientError;
 use crate::error::ProfileError;
 use crate::getby::GetBy;
 use crate::secrets::get_store_from_settings;
 use crate::settings::CisSettings;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
-use failure::Error;
 use futures::future;
 use futures::future::FutureExt;
 use futures::future::TryFutureExt;
@@ -28,61 +28,49 @@ static DEFAULT_BATCH_SIZE: usize = 25;
 #[derive(Clone)]
 pub struct CisClient {
     pub bearer_store: RemoteStore<BearerBearer, Auth0>,
-    pub person_api_user_endpoint: String,
-    pub person_api_users_endpoint: String,
-    pub change_api_user_endpoint: String,
-    pub change_api_users_endpoint: String,
+    pub person_api_user_endpoint: Url,
+    pub person_api_users_endpoint: Url,
+    pub change_api_user_endpoint: Url,
+    pub change_api_users_endpoint: Url,
     pub secret_store: Arc<SecretStore>,
     pub batch_size: usize,
 }
 
 impl CisClient {
-    pub async fn from_settings(settings: &CisSettings) -> Result<Self, Error> {
+    pub async fn from_settings(settings: &CisSettings) -> Result<Self, CisClientError> {
         let bearer_store = RemoteStore::new(Auth0::new(settings.client_config.clone()));
         let secret_store = get_store_from_settings(settings).await?;
         Ok(CisClient {
             bearer_store,
-            person_api_user_endpoint: settings
-                .person_api_user_endpoint
-                .clone()
-                .unwrap_or_default(),
-            person_api_users_endpoint: settings
-                .person_api_users_endpoint
-                .clone()
-                .unwrap_or_default(),
-            change_api_user_endpoint: settings
-                .change_api_user_endpoint
-                .clone()
-                .unwrap_or_default(),
-            change_api_users_endpoint: settings
-                .change_api_users_endpoint
-                .clone()
-                .unwrap_or_default(),
+            person_api_user_endpoint: settings.person_api_user_endpoint.clone(),
+            person_api_users_endpoint: settings.person_api_users_endpoint.clone(),
+            change_api_user_endpoint: settings.change_api_user_endpoint.clone(),
+            change_api_users_endpoint: settings.change_api_users_endpoint.clone(),
             secret_store: Arc::new(secret_store),
             batch_size: DEFAULT_BATCH_SIZE,
         })
     }
     #[cfg(feature = "sync")]
-    pub fn from_settings_sync(settings: &CisSettings) -> Result<Self, Error> {
+    pub fn from_settings_sync(settings: &CisSettings) -> Result<Self, CisClientError> {
         use tokio::runtime::Runtime;
-        let rt = Runtime::new()?;
+        let rt = Runtime::new().map_err(|_| CisClientError::RuntimeError)?;
         rt.block_on(Self::from_settings(settings))
     }
 
-    pub async fn bearer_token(&self) -> Result<String, Error> {
+    pub async fn bearer_token(&self) -> Result<String, CisClientError> {
         let b = self.bearer_store.get().await?;
         Ok((*b.bearer_token_str).to_owned())
     }
 
     #[cfg(feature = "sync")]
-    pub fn bearer_token_sync(&self) -> Result<String, Error> {
+    pub fn bearer_token_sync(&self) -> Result<String, CisClientError> {
         use tokio::runtime::Runtime;
-        let rt = Runtime::new()?;
+        let rt = Runtime::new().map_err(|_| CisClientError::RuntimeError)?;
         rt.block_on(self.bearer_token())
     }
 }
 
-pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>;
+pub type CisFut<T> = Pin<Box<dyn Future<Output = Result<T, CisClientError>> + Send>>;
 
 pub trait AsyncCisClientTrait {
     fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> CisFut<Profile>;
@@ -97,12 +85,12 @@ pub trait AsyncCisClientTrait {
 async fn send<T: DeserializeOwned>(
     bearer_store: RemoteStore<BearerBearer, Auth0>,
     url: Url,
-) -> Result<T, Error> {
+) -> Result<T, CisClientError> {
     log::debug!("getting token");
     let token = bearer_store.get().await?;
     log::debug!("got token");
     let res = Client::new()
-        .get(url.as_str())
+        .get(url)
         .bearer_auth(token.bearer_token_str)
         .send()
         .err_into()
@@ -115,7 +103,7 @@ async fn post<T: DeserializeOwned>(
     bearer_store: RemoteStore<BearerBearer, Auth0>,
     url: Url,
     payload: impl Serialize,
-) -> Result<T, Error> {
+) -> Result<T, CisClientError> {
     let token = bearer_store.get().await?;
     let res = Client::new()
         .post(url.as_str())
@@ -132,7 +120,7 @@ async fn delete<T: DeserializeOwned>(
     bearer_store: RemoteStore<BearerBearer, Auth0>,
     url: Url,
     payload: impl Serialize,
-) -> Result<T, Error> {
+) -> Result<T, CisClientError> {
     let token = bearer_store.get().await?;
     let res = Client::new()
         .delete(url.as_str())
@@ -158,11 +146,9 @@ impl CisClient {
             Some(b) => b.to_string(),
         };
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let base = match Url::parse(&self.person_api_user_endpoint) {
-            Ok(base) => base,
-            Err(e) => return Box::pin(future::err(e.into())),
-        };
-        let url = match base
+        let url = match self
+            .person_api_user_endpoint
+            .clone()
             .join(by.as_str())
             .and_then(|u| u.join(safe_id.trim_start_matches('.')))
             .map(|mut u| {
@@ -198,10 +184,7 @@ impl AsyncCisClientTrait for CisClient {
     }
     fn update_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let mut url = match Url::parse(&self.change_api_user_endpoint) {
-            Ok(base) => base,
-            Err(e) => return Box::pin(future::err(e.into())),
-        };
+        let mut url = self.change_api_user_endpoint.clone();
         url.set_query(Some(&format!("user_id={}", safe_id)));
         Box::pin(post(self.bearer_store.clone(), url, profile))
     }
@@ -210,10 +193,7 @@ impl AsyncCisClientTrait for CisClient {
     }
     fn delete_user(&self, id: &str, profile: Profile) -> CisFut<Value> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let mut url = match Url::parse(&self.change_api_user_endpoint) {
-            Ok(base) => base,
-            Err(e) => return Box::pin(future::err(e.into())),
-        };
+        let mut url = self.change_api_user_endpoint.clone();
         url.set_query(Some(&format!("user_id={}", safe_id)));
         Box::pin(delete(self.bearer_store.clone(), url, profile))
     }
@@ -222,7 +202,7 @@ impl AsyncCisClientTrait for CisClient {
     }
 }
 
-fn flatten_status(result: Result<Response, Error>) -> Result<Response, Error> {
+fn flatten_status(result: Result<Response, CisClientError>) -> Result<Response, CisClientError> {
     match result {
         Ok(res) => res.error_for_status().map_err(Into::into),
         Err(e) => Err(e),

@@ -1,5 +1,6 @@
 use crate::client::CisClient;
 use crate::encoding::USERINFO_ENCODE_SET;
+use crate::error::CisClientError;
 use crate::error::ProfileError;
 use crate::getby::GetBy;
 use crate::sync::batch::Batch;
@@ -7,7 +8,6 @@ use crate::sync::batch::NextPage;
 use crate::sync::batch::ProfileIter;
 use cis_profile::crypto::SecretStore;
 use cis_profile::schema::Profile;
-use failure::Error;
 use log::info;
 use percent_encoding::utf8_percent_encode;
 use reqwest::blocking::Client;
@@ -18,25 +18,34 @@ use serde_json::json;
 use serde_json::Value;
 
 pub trait CisClientTrait {
-    type PI: Iterator<Item = Result<Vec<Profile>, Error>>;
-    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error>;
+    type PI: Iterator<Item = Result<Vec<Profile>, CisClientError>>;
+    fn get_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, CisClientError>;
     fn get_inactive_user_by(
         &self,
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-    ) -> Result<Profile, Error>;
-    fn get_any_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>)
-        -> Result<Profile, Error>;
-    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error>;
+    ) -> Result<Profile, CisClientError>;
+    fn get_any_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, CisClientError>;
+    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, CisClientError>;
     fn get_batch(
         &self,
         next_page: &Option<NextPage>,
         filter: &Option<String>,
-    ) -> Result<Batch, Error>;
-    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, Error>;
-    fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error>;
-    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, Error>;
+    ) -> Result<Batch, CisClientError>;
+    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, CisClientError>;
+    fn update_users(&self, profiles: &[Profile]) -> Result<Value, CisClientError>;
+    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, CisClientError>;
     fn get_secret_store(&self) -> &SecretStore;
 }
 
@@ -47,14 +56,15 @@ impl CisClient {
         by: &GetBy,
         filter: Option<&str>,
         active: Option<bool>,
-    ) -> Result<Profile, Error> {
+    ) -> Result<Profile, CisClientError> {
         let active = match active {
             None => String::from("any"),
             Some(b) => b.to_string(),
         };
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let base = Url::parse(&self.person_api_user_endpoint)?;
-        let url = base
+        let url = self
+            .person_api_user_endpoint
+            .clone()
             .join(by.as_str())
             .and_then(|u| u.join(safe_id.trim_start_matches('.')))
             .map(|mut u| {
@@ -70,19 +80,27 @@ impl CisClient {
         }
         Ok(profile)
     }
-    fn get<T: DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
+    fn get<T: DeserializeOwned>(&self, url: Url) -> Result<T, CisClientError> {
         let token = self.bearer_token_sync()?;
         let client = Client::new().get(url.as_str()).bearer_auth(token);
         let res = client.send()?.error_for_status()?;
         res.json().map_err(Into::into)
     }
-    fn post<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
+    fn post<T: DeserializeOwned, P: Serialize>(
+        &self,
+        url: Url,
+        payload: P,
+    ) -> Result<T, CisClientError> {
         let token = self.bearer_token_sync()?;
         let client = Client::new().post(url).json(&payload).bearer_auth(token);
         let res = client.send()?.error_for_status()?;
         res.json().map_err(Into::into)
     }
-    fn delete<T: DeserializeOwned, P: Serialize>(&self, url: Url, payload: P) -> Result<T, Error> {
+    fn delete<T: DeserializeOwned, P: Serialize>(
+        &self,
+        url: Url,
+        payload: P,
+    ) -> Result<T, CisClientError> {
         let token = self.bearer_token_sync()?;
         let client = Client::new().delete(url).json(&payload).bearer_auth(token);
         let res = client.send()?.error_for_status()?;
@@ -98,7 +116,7 @@ impl CisClientTrait for CisClient {
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-    ) -> Result<Profile, Error> {
+    ) -> Result<Profile, CisClientError> {
         self.get_user_sync(id, by, filter, Some(false))
     }
     fn get_any_user_by(
@@ -106,14 +124,19 @@ impl CisClientTrait for CisClient {
         id: &str,
         by: &GetBy,
         filter: Option<&str>,
-    ) -> Result<Profile, Error> {
+    ) -> Result<Profile, CisClientError> {
         self.get_user_sync(id, by, filter, None)
     }
-    fn get_user_by(&self, id: &str, by: &GetBy, filter: Option<&str>) -> Result<Profile, Error> {
+    fn get_user_by(
+        &self,
+        id: &str,
+        by: &GetBy,
+        filter: Option<&str>,
+    ) -> Result<Profile, CisClientError> {
         self.get_user_sync(id, by, filter, Some(true))
     }
 
-    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, Error> {
+    fn get_users_iter(&self, filter: Option<&str>) -> Result<Self::PI, CisClientError> {
         let p = ProfileIter::new(self.clone(), filter.map(String::from));
         Ok(p)
     }
@@ -122,8 +145,8 @@ impl CisClientTrait for CisClient {
         &self,
         next_page: &Option<NextPage>,
         filter: &Option<String>,
-    ) -> Result<Batch, Error> {
-        let mut url = Url::parse(&self.person_api_users_endpoint)?;
+    ) -> Result<Batch, CisClientError> {
+        let mut url = self.person_api_users_endpoint.clone();
         if let Some(df) = filter {
             url.query_pairs_mut().append_pair("filterDisplay", df);
         }
@@ -149,24 +172,24 @@ impl CisClientTrait for CisClient {
         Ok(Batch { items, next_page })
     }
 
-    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
+    fn update_user(&self, id: &str, profile: Profile) -> Result<Value, CisClientError> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let mut url = Url::parse(&self.change_api_user_endpoint)?;
+        let mut url = self.change_api_user_endpoint.clone();
         url.set_query(Some(&format!("user_id={}", safe_id)));
         self.post(url, profile)
     }
 
-    fn update_users(&self, profiles: &[Profile]) -> Result<Value, Error> {
-        let url = Url::parse(&self.change_api_users_endpoint)?;
+    fn update_users(&self, profiles: &[Profile]) -> Result<Value, CisClientError> {
+        let url = self.change_api_users_endpoint.clone();
         for chunk in profiles.chunks(self.batch_size) {
             self.post(url.clone(), chunk)?;
         }
         Ok(json!({ "status": "all good" }))
     }
 
-    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, Error> {
+    fn delete_user(&self, id: &str, profile: Profile) -> Result<Value, CisClientError> {
         let safe_id = utf8_percent_encode(id, USERINFO_ENCODE_SET).to_string();
-        let mut url = Url::parse(&self.change_api_user_endpoint)?;
+        let mut url = self.change_api_user_endpoint.clone();
         url.set_query(Some(&format!("user_id={}", safe_id)));
         self.delete(url, profile)
     }

@@ -1,6 +1,6 @@
 [package]
 name = "cis_client"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["Florian Merz <me@fiji-flo.de>"]
 edition = "2018"
 
@@ -9,19 +9,20 @@ default = []
 sync = ["reqwest/blocking", "tokio"]
 
 [dependencies]
-shared-expiry-get = "0.1"
-cis_profile = { git = "https://github.com/mozilla-iam/cis_profile-rust", version = "0.5", branch = "0.5", features = ["aws", "vendored", "well_known"] }
-reqwest =  { version = "0.10", features = ["json"] }
+shared-expiry-get = "0.2"
+cis_profile = { git = "https://github.com/mozilla-iam/cis_profile-rust", version = "0.6", branch = "0.6", features = ["aws", "vendored", "well_known"] }
+reqwest =  { version = "0.11", features = ["json"] }
 biscuit = "0.5"
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.32"
 percent-encoding = "2.1"
-failure = "0.1"
-failure_derive = "0.1"
 futures = "0.3"
+thiserror = "1"
 log = "0.4"
-tokio = { optional = true, version = "0.3" }
+url =  { version = "2", features = ["serde"] }
+tokio = { optional = true, version = "1" }
 
 [dev-dependencies]
-tokio = { version = "0.3", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
