@@ -136,7 +136,7 @@ mod test {
             } else {
                 self.count
             };
-            return Ok(Batch {
+            Ok(Batch {
                 items: Some(vec![Profile::default()]),
                 next_page: if left > 1 {
                     Some(NextPage {
@@ -145,7 +145,7 @@ mod test {
                 } else {
                     None
                 },
-            });
+            })
         }
         fn update_user(&self, _: &str, _: Profile) -> Result<Value, Error> {
             unimplemented!()
