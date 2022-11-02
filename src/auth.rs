@@ -61,7 +61,7 @@ impl Provider<BearerBearer> for Auth0 {
 
 fn get_expiration(token: &str) -> Result<DateTime<Utc>, Error> {
     let c: jws::Compact<biscuit::ClaimsSet<Value>, biscuit::Empty> =
-        jws::Compact::new_encoded(&token);
+        jws::Compact::new_encoded(token);
     let payload = c.unverified_payload()?;
     let exp = payload.registered.expiry.ok_or(TokenError::NoExpiry)?;
     Ok(*exp)

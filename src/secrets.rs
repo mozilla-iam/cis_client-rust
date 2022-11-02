@@ -22,7 +22,7 @@ pub async fn get_store_from_settings(settings: &CisSettings) -> Result<SecretSto
         ("none", _) => store,
         ("file", _) => add_verify_keys_from_files(&settings.verify_keys, store)?,
         ("ssm", _) => add_verify_keys_from_ssm(&settings.verify_keys, store).await?,
-        ("well_known", Some(url)) => store.with_verify_keys_from_well_known(&url).await?,
+        ("well_known", Some(url)) => store.with_verify_keys_from_well_known(url).await?,
         _ => {
             return Err(SecretsError::UseNoneFileSsmWellKnonw.into());
         }
