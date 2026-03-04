@@ -1,19 +1,14 @@
 use serde::Deserialize;
 use url::Url;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Default, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeySource {
+    #[default]
     None,
     File,
     Ssm,
     WellKnown,
-}
-
-impl Default for KeySource {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
