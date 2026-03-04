@@ -182,7 +182,7 @@ impl CisClientTrait for CisClient {
     fn update_users(&self, profiles: &[Profile]) -> Result<Value, CisClientError> {
         let url = self.change_api_users_endpoint.clone();
         for chunk in profiles.chunks(self.batch_size) {
-            self.post(url.clone(), chunk)?;
+            self.post::<Value, _>(url.clone(), chunk)?;
         }
         Ok(json!({ "status": "all good" }))
     }
